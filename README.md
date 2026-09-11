@@ -58,18 +58,55 @@ Không mở port nào. `cloudflared` tự gọi ra Cloudflare nên không có k�
 
 Miễn phí tới 50 người.
 
-### Cách 2 — VPS + Caddy, có URL công khai
+### Cách 2 — VPS + Caddy, URL công khai trên internet
 
-Dùng khi cần URL thật cho khách xem. Caddy tự xin và gia hạn chứng chỉ Let's Encrypt.
+Caddy tự xin và gia hạn chứng chỉ Let's Encrypt.
 
-1. Sửa tên miền trong `deploy/Caddyfile`, trỏ A record về IP của VPS.
-2. Mở port 80 và 443 trên firewall VPS.
-3. Chạy:
-   ```bash
-   docker compose -f docker-compose.yml -f deploy/docker-compose.public.yml up -d
-   ```
+**Cần có trước:** một VPS (Ubuntu, 1GB RAM là đủ) và một tên miền trỏ A record về IP của VPS.
 
-Đường này app **chỉ còn mã truy cập che chắn**. Nếu chọn nó, ít nhất hãy dùng mã dài hơn: sửa `randomBytes(4)` thành `randomBytes(16)` trong `server.mjs`.
+```bash
+# --- Trên VPS ---
+
+# 1. Docker
+curl -fsSL https://get.docker.com | sh
+
+# 2. Lấy code (repo private nên cần token hoặc deploy key)
+git clone https://github.com/<user>/runway-studio.git
+cd runway-studio
+
+# 3. API key
+cp .env.example .env
+nano .env            # điền RUNWAY_API_KEY
+
+# 4. Tên miền
+nano deploy/Caddyfile    # thay studio.tenmien.com
+
+# 5. Mở port
+ufw allow 80/tcp && ufw allow 443/tcp
+
+# 6. Chạy
+docker compose -f docker-compose.yml -f deploy/docker-compose.public.yml up -d
+
+# 7. Lấy mã admin
+docker compose logs studio | grep Admin
+```
+
+**Bắt buộc sau khi chạy:** đăng nhập → **Users** → bấm **Tạo lại mã** cho mọi tài khoản. Mã sinh ra trước đây chỉ dài 8 ký tự, không đủ cho internet. Giao diện sẽ tô đỏ và cảnh báo những mã như vậy.
+
+Đường này app **chỉ còn mã truy cập che chắn** — không có SSO như Cách 1. Những gì đang bảo vệ nó:
+
+| Lớp | Chi tiết |
+|---|---|
+| Mã truy cập | 32 ký tự hex — 16 byte ngẫu nhiên, không dò được |
+| Giới hạn thử | Sai 5 lần khoá theo IP, chờ tăng dần 30s → tối đa 15 phút |
+| HTTPS | Let's Encrypt qua Caddy, kèm HSTS |
+| Cookie phiên | `HttpOnly`, `SameSite=Lax`, `Secure` |
+| File kết quả | `/outputs/*` yêu cầu phiên hợp lệ |
+| Thu hồi | Tạo lại mã hoặc xoá tài khoản có tác dụng ngay |
+
+Rủi ro còn lại: mã là **secret dùng chung** — ai lộ mã thì vào được và tiêu credit. Giới hạn theo IP không chặn được tấn công từ nhiều IP cùng lúc, nhưng 32 ký tự hex thì dò là bất khả thi. Hạn mức ngày của Runway (50 video / 200 ảnh cho cả tổ chức) là trần thiệt hại trong trường hợp xấu nhất.
+
+Nên làm định kỳ: xem log `docker compose logs studio | grep "ma sai"` để phát hiện có ai đang dò.
 
 ### Hai biến môi trường bắt buộc khi chạy sau proxy
 

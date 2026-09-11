@@ -48,6 +48,8 @@ export interface User {
   name: string;
   role: 'admin' | 'member';
   code: string;
+  /** Ma ngan hon nguong an toan - chi dung duoc trong mang noi bo. */
+  weak?: boolean;
 }
 
 export const credits = (c: Cost): number | null =>
@@ -107,6 +109,7 @@ export const api = {
   addUser: (name: string, role: 'admin' | 'member') => post<User>('/api/users', { name, role }),
   removeUser: (name: string) =>
     request<{ ok: true }>(`/api/users/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  rotateUser: (name: string) => post<User>(`/api/users/${encodeURIComponent(name)}/rotate`),
 
   /** Gui raw bytes; ten file ma hoa o header vi co the chua dau tieng Viet. */
   async upload(file: File): Promise<{ uri: string; filename: string }> {

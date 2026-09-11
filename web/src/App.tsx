@@ -263,13 +263,31 @@ function UsersDialog({ onClose }: { onClose: () => void }) {
     onSuccess: invalidate,
     onError: (e: Error) => toast(e.message, 'err'),
   });
+  const rotate = useMutation({
+    mutationFn: (n: string) => api.rotateUser(n),
+    onSuccess: (u) => {
+      invalidate();
+      toast(`Đã tạo mã mới cho ${u.name} — gửi lại cho họ`, 'ok');
+    },
+    onError: (e: Error) => toast(e.message, 'err'),
+  });
+
+  const weakCount = users.filter((u) => u.weak).length;
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[150] bg-black/70" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-[150] w-[min(540px,calc(100vw-32px))] max-h-[80vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-line bg-surface p-6">
-          <Dialog.Title className="mb-4 font-display text-base font-semibold">Người dùng nội bộ</Dialog.Title>
+          <Dialog.Title className="mb-4 font-display text-base font-semibold">Người dùng</Dialog.Title>
+
+          {weakCount > 0 && (
+            <div className="mb-4 rounded-lg border border-[#4d2020] bg-[#1d1314] px-3.5 py-2.5 text-[12.5px] leading-relaxed text-[#ffb4b4]">
+              <b className="font-semibold">{weakCount} mã quá ngắn cho môi trường internet.</b>{' '}
+              Mã 8 ký tự chỉ an toàn trong mạng nội bộ. Nếu app đã mở ra internet, bấm
+              “Tạo lại mã” cho từng người rồi gửi mã mới.
+            </div>
+          )}
 
           <table className="w-full text-[13px]">
             <thead>
@@ -285,13 +303,37 @@ function UsersDialog({ onClose }: { onClose: () => void }) {
                 <tr key={u.name} className="border-b border-line-soft">
                   <td className="py-2 pr-3">{u.name}</td>
                   <td className="py-2 pr-3">
-                    <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[12px]">{u.code}</code>
+                    <button
+                      type="button"
+                      title="Bấm để copy"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(u.code);
+                        toast('Đã copy mã');
+                      }}
+                      className={`max-w-[190px] truncate rounded px-1.5 py-0.5 font-mono text-[11.5px] transition-colors ${
+                        u.weak
+                          ? 'bg-[#3a1717] text-err hover:brightness-125'
+                          : 'bg-surface-2 text-ink hover:bg-line'
+                      }`}
+                    >
+                      {u.code}
+                    </button>
                   </td>
                   <td className="py-2 pr-3 text-ink-muted">{u.role}</td>
                   <td className="py-2 text-right">
-                    <Button size="sm" variant="danger" onClick={() => remove.mutate(u.name)}>
-                      Xoá
-                    </Button>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => rotate.mutate(u.name)}
+                        title="Thu hồi mã cũ, tạo mã mới"
+                      >
+                        Tạo lại mã
+                      </Button>
+                      <Button size="sm" variant="danger" onClick={() => remove.mutate(u.name)}>
+                        Xoá
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -310,7 +352,8 @@ function UsersDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           <p className="mt-4 text-[12px] leading-relaxed text-ink-faint">
-            Gửi mã truy cập cho từng người. Xoá tài khoản là thu hồi quyền ngay lập tức.
+            Bấm vào mã để copy. Gửi cho từng người qua kênh riêng, đừng đăng lên chat nhóm.
+            Xoá tài khoản hoặc tạo lại mã là thu hồi mã cũ ngay lập tức.
           </p>
 
           <Dialog.Close asChild>

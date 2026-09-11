@@ -74,10 +74,24 @@ const SECRET = (() => {
   return s;
 })();
 
+/**
+ * Do dai ma truy cap.
+ *
+ * 16 byte = 32 ky tu hex. Ban dau la 4 byte (8 ky tu) - du cho mang noi bo
+ * nhung qua ngan khi app mo ra internet: 8 hex chi co 4.3 ty to hop, va gioi
+ * han theo IP khong chan duoc tan cong tu nhieu IP cung luc.
+ */
+const CODE_BYTES = 16;
+const newCode = () => randomBytes(CODE_BYTES).toString('hex');
+
+/** Ma cu ngan hon nguong an toan - canh bao de admin tao lai. */
+const WEAK_CODE_LEN = 24;
+const isWeakCode = (code) => typeof code === 'string' && code.length < WEAK_CODE_LEN;
+
 function ensureUsers() {
   let users = readJson(USERS_FILE, null);
   if (!Array.isArray(users) || !users.length) {
-    users = [{ name: 'admin', code: randomBytes(4).toString('hex'), role: 'admin' }];
+    users = [{ name: 'admin', code: newCode(), role: 'admin' }];
     writeJson(USERS_FILE, users);
   }
   return users;
@@ -557,7 +571,12 @@ app.post('/api/save', wrap(async (req, res) => {
 
 // --- Quan tri nguoi dung ---
 app.get('/api/users', requireAdmin, wrap(async (_req, res) => {
-  res.json(reloadUsers().map((u) => ({ name: u.name, role: u.role || 'member', code: u.code })));
+  res.json(reloadUsers().map((u) => ({
+    name: u.name,
+    role: u.role || 'member',
+    code: u.code,
+    weak: isWeakCode(u.code),
+  })));
 }));
 
 app.post('/api/users', requireAdmin, wrap(async (req, res) => {
@@ -565,11 +584,25 @@ app.post('/api/users', requireAdmin, wrap(async (req, res) => {
   if (!name) return res.status(400).json({ error: 'Thieu ten' });
   const users = reloadUsers();
   if (users.some((u) => u.name === name)) return res.status(409).json({ error: 'Ten da ton tai' });
-  const user = { name, code: randomBytes(4).toString('hex'), role: req.body?.role === 'admin' ? 'admin' : 'member' };
+  const user = { name, code: newCode(), role: req.body?.role === 'admin' ? 'admin' : 'member' };
   users.push(user);
   writeJson(USERS_FILE, users);
   reloadUsers();
-  res.json(user);
+  res.json({ ...user, weak: isWeakCode(user.code) });
+}));
+
+/**
+ * Tao lai ma cho mot nguoi. Phien dang nhap hien tai cua ho KHONG bi huy
+ * vi token ky theo ten, khong theo ma - nhung ma cu se khong dung duoc nua.
+ */
+app.post('/api/users/:name/rotate', requireAdmin, wrap(async (req, res) => {
+  const users = reloadUsers();
+  const user = users.find((u) => u.name === req.params.name);
+  if (!user) return res.status(404).json({ error: 'Khong tim thay nguoi dung' });
+  user.code = newCode();
+  writeJson(USERS_FILE, users);
+  reloadUsers();
+  res.json({ name: user.name, code: user.code, role: user.role || 'member', weak: false });
 }));
 
 app.delete('/api/users/:name', requireAdmin, wrap(async (req, res) => {
@@ -618,6 +651,19 @@ app.listen(PORT, HOST, () => {
   console.log(`  API key  : ${API_KEY ? `${API_KEY.slice(0, 8)}...${API_KEY.slice(-4)} OK` : 'KHONG TIM THAY'}`);
   const admin = USERS.find((u) => u.role === 'admin');
   if (admin) console.log(`  Admin    : ${admin.name} / ma dang nhap: ${admin.code}`);
+
+  const weak = USERS.filter((u) => isWeakCode(u.code)).map((u) => u.name);
+  if (weak.length) {
+    console.log('');
+    console.log(`  CANH BAO : ma truy cap qua ngan: ${weak.join(', ')}`);
+    console.log('             Chi an toan trong mang noi bo. Neu app mo ra internet,');
+    console.log('             vao muc Users bam "Tao lai ma" cho tung nguoi.');
+  }
+  if (process.env.TRUST_PROXY && !process.env.FORCE_SECURE_COOKIE) {
+    console.log('');
+    console.log('  CANH BAO : TRUST_PROXY bat nhung FORCE_SECURE_COOKIE tat.');
+    console.log('             Neu dang chay sau HTTPS thi nen bat ca hai.');
+  }
   console.log('');
 });
 
