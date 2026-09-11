@@ -67,7 +67,22 @@ function loadKeyFromRegistry() {
 // ---------------------------------------------------------------------------
 // Nguoi dung + phien dang nhap
 // ---------------------------------------------------------------------------
+/**
+ * Secret ky cookie phien.
+ *
+ * Uu tien bien moi truong SESSION_SECRET. Quan trong khi deploy tren nen tang
+ * hosted: neu sinh ra roi ghi file, moi lan deploy lai ma volume chua gan dung
+ * se ra secret khac, va toan bo nguoi dang dang nhap bi day ra ngoai.
+ * Dat SESSION_SECRET thi phien song qua moi lan deploy.
+ */
 const SECRET = (() => {
+  const fromEnv = process.env.SESSION_SECRET?.trim();
+  if (fromEnv) {
+    if (fromEnv.length < 32) {
+      console.warn('  CANH BAO : SESSION_SECRET ngan hon 32 ky tu, nen dat dai hon');
+    }
+    return fromEnv;
+  }
   if (existsSync(SECRET_FILE)) return readFileSync(SECRET_FILE, 'utf8').trim();
   const s = randomBytes(32).toString('hex');
   writeFileSync(SECRET_FILE, s, 'utf8');
