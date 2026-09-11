@@ -7,7 +7,7 @@
  * chuyen store giu mot model khong hop le voi input hien tai.
  */
 import { create } from 'zustand';
-import type { AssetKind, AttachedAsset, Catalog, Endpoint, FormValues, OutputKind, Target } from '@/lib/catalog';
+import type { AssetKind, AttachedAsset, Catalog, Endpoint, FormValues, ImageRole, OutputKind, Target } from '@/lib/catalog';
 import { resolveTargets, sanitizeTag, TAG_MAX } from '@/lib/catalog';
 
 interface State {
@@ -16,6 +16,8 @@ interface State {
   /** Khi chon mot cong cu chuyen biet (Upscale, recipe…) thi bo qua suy luan. */
   toolPath: string | null;
   attachments: AttachedAsset[];
+  /** Anh dinh kem dung lam khung dau hay lam tham chieu goi trong prompt. */
+  imageRole: ImageRole;
   lastFrame: AttachedAsset | null;
   prompt: string;
   modelName: string | null;
@@ -28,6 +30,7 @@ interface State {
   addAttachment: (a: AttachedAsset) => void;
   removeAttachment: (uri: string) => void;
   setAttachmentTag: (uri: string, tag: string) => void;
+  setImageRole: (r: ImageRole) => void;
   setLastFrame: (a: AttachedAsset | null) => void;
   setPrompt: (p: string) => void;
   /** Tra ve ten cac tham so bi bo vi khong con hop le voi model moi. */
@@ -61,6 +64,7 @@ export const useStore = create<State>((set, get) => ({
   outputKind: 'video',
   toolPath: null,
   attachments: [],
+  imageRole: 'keyframe',
   lastFrame: null,
   prompt: '',
   modelName: null,
@@ -94,6 +98,19 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({
       attachments: s.attachments.map((a) => (a.uri === uri ? { ...a, tag } : a)),
     })),
+
+  // Doi che do dung anh -> endpoint thay doi han nen model cu khong con hop le.
+  // Sang che do tham chieu thi khung cuoi vo nghia, bo luon.
+  setImageRole: (imageRole) =>
+    set({
+      imageRole,
+      modelName: null,
+      values: {},
+      // O che do tham chieu thi khung cuoi vo nghia. Dung spread co dieu kien
+      // vi truyen undefined vao set() se GHI DE thanh undefined, khong phai
+      // giu nguyen gia tri cu.
+      ...(imageRole === 'reference' ? { lastFrame: null } : {}),
+    }),
 
   setLastFrame: (lastFrame) => set({ lastFrame }),
   setPrompt: (prompt) => set({ prompt }),
@@ -194,7 +211,7 @@ export function selectTargets(s: State): Target[] {
     return ep.models.map((variant) => ({ endpoint: ep, variant, score: 0 }));
   }
 
-  return resolveTargets(s.catalog, s.outputKind, attachedKinds(s.attachments));
+  return resolveTargets(s.catalog, s.outputKind, attachedKinds(s.attachments), s.imageRole);
 }
 
 /** To hop dang duoc chon (theo modelName, mac dinh la cai dau tien). */

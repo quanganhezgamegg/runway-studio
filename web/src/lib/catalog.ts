@@ -151,10 +151,13 @@ export function outputOf(ep: Endpoint): OutputKind | null {
  * Nho vay dinh mot tam anh + chon Video se ra image_to_video chu khong phai
  * text_to_video (endpoint sau cung "hop le" nhung bo qua tam anh).
  */
+export type ImageRole = 'keyframe' | 'reference';
+
 export function resolveTargets(
   catalog: Catalog,
   output: OutputKind,
-  attached: Set<AssetKind>
+  attached: Set<AssetKind>,
+  imageRole: ImageRole = 'keyframe'
 ): Target[] {
   const candidates: Target[] = [];
 
@@ -168,6 +171,19 @@ export function resolveTargets(
       const satisfied = groups.every((g) => g.some((k) => attached.has(k)));
       if (!satisfied) continue;
 
+      // Che do "anh lam tham chieu": chi giu variant coi anh la input TUY CHON.
+      //
+      // Can thiet vi image_to_video co 0/16 model nhan anh tham chieu - anh o
+      // do luon la khung hinh dau. Muon goi anh trong prompt thi phai di duong
+      // text_to_video voi truong `references` (9/15 model co). Day chinh la
+      // rang buoc "two modes cannot be mixed" the hien o tang dieu huong.
+      if (imageRole === 'reference' && attached.has('image')) {
+        const acceptsAsReference = variant.fields.some(
+          (f) => !f.required && f.control === 'asset-list' && kindsOf(f).includes('image')
+        );
+        if (!acceptsAsReference) continue;
+      }
+
       // Cham diem: dap ung input BAT BUOC nang hon dung lam input tuy chon.
       //
       // Khong co trong so nay thi dinh 1 anh + chon Video se tra ve ca
@@ -178,7 +194,10 @@ export function resolveTargets(
 
       let score = 0;
       for (const a of attached) {
-        if (required.has(a)) score += 10;
+        // O che do reference, dung anh lam tham chieu la dung y dinh nen
+        // khong duoc coi nhe hon required nua
+        if (imageRole === 'reference' && a === 'image') score += 10;
+        else if (required.has(a)) score += 10;
         else if (optional.has(a)) score += 1;
       }
 
@@ -228,6 +247,22 @@ export function blockedTargets(
     }
   }
   return missing;
+}
+
+/**
+ * Che do dung anh nao kha dung voi loai ket qua + file dang dinh kem.
+ * Chi hien lua chon khi ca hai che do deu co model, khong thi an di.
+ */
+export function availableImageRoles(
+  catalog: Catalog,
+  output: OutputKind,
+  attached: Set<AssetKind>
+): ImageRole[] {
+  if (!attached.has('image')) return [];
+  const roles: ImageRole[] = [];
+  if (resolveTargets(catalog, output, attached, 'keyframe').length) roles.push('keyframe');
+  if (resolveTargets(catalog, output, attached, 'reference').length) roles.push('reference');
+  return roles;
 }
 
 /** Endpoint chuyen biet khong suy ra duoc - hien o nhom "Cong cu". */

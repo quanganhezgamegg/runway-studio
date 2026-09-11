@@ -15,6 +15,7 @@ import {
   buildPayload,
   effectiveValue,
   missingRequired,
+  availableImageRoles,
   durationChoices,
   mentionStyle,
   roleLabel,
@@ -163,11 +164,32 @@ export function Composer() {
   );
   const unused = store.attachments.filter((a) => !roles.has(a.uri));
 
+  // Anh dinh kem dung lam gi: khung dau hay tham chieu.
+  // Phai cho chon vi image_to_video co 0/16 model nhan anh tham chieu - khong
+  // co lua chon nay thi khong bao gio goi duoc anh bang @ hay [Image N] khi
+  // dang o Video.
+  const imageRoles = useMemo(
+    () =>
+      store.catalog && !store.toolPath
+        ? availableImageRoles(store.catalog, store.outputKind, attachedKinds(store.attachments))
+        : [],
+    [store.catalog, store.toolPath, store.outputKind, store.attachments]
+  );
+
   // Cach goi tham chieu: @tag (co truong tag) hay [Image N] (theo vi tri)
   const mention2 = mentionStyle(variant);
   const tagsOn = supportsTags(variant);
   const usedTags = useMemo(() => tagsUsedIn(store.prompt), [store.prompt]);
-  const taggable = store.attachments.filter((a) => roles.get(a.uri) === 'referenceImages');
+
+  // Ten truong nhan anh tham chieu KHAC NHAU theo endpoint:
+  // text_to_image dung `referenceImages`, text_to_video dung `references`.
+  // Hard-code mot ten se lam nut @tag / [Image N] bien mat o endpoint kia.
+  const refFieldName = (variant?.fields ?? []).find(
+    (f) => f.control === 'asset-list' && (f.assetKinds ?? (f.asset ? [f.asset] : [])).includes('image')
+  )?.name;
+  const taggable = refFieldName
+    ? store.attachments.filter((a) => roles.get(a.uri) === refFieldName)
+    : [];
 
   /** Vi tri cua mot anh trong danh sach tham chieu (dung cho [Image N]). */
   const refIndex = (uri: string) => taggable.findIndex((a) => a.uri === uri);
@@ -277,7 +299,7 @@ export function Composer() {
       <div className="mb-2 flex flex-wrap items-start gap-2">
         {store.attachments.map((a) => {
           const role = roles.get(a.uri);
-          const isRef = role === 'referenceImages';
+          const isRef = role != null && role === refFieldName;
           return (
             <div key={a.uri} className="w-[84px]">
               <div
@@ -370,6 +392,40 @@ export function Composer() {
           }}
         />
       </div>
+
+      {/* Anh dung lam gi - chi hien khi ca hai che do deu co model */}
+      {imageRoles.length > 1 && (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-ink-faint">Ảnh đính kèm dùng làm</span>
+          <div className="flex rounded-lg border border-line p-0.5">
+            {([
+              ['keyframe', 'Khung đầu', 'Ảnh là khung hình đầu tiên của video'],
+              ['reference', 'Tham chiếu', 'Gọi ảnh trong prompt để giữ nhân vật, bối cảnh hoặc phong cách'],
+            ] as const).map(([role, label, hint]) => (
+              <button
+                key={role}
+                type="button"
+                title={hint}
+                onClick={() => store.setImageRole(role)}
+                className={`rounded-md px-2.5 py-1 text-[11.5px] transition-colors ${
+                  store.imageRole === role
+                    ? 'bg-surface-2 text-ink'
+                    : 'text-ink-muted hover:text-ink'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <span className="text-[10.5px] text-ink-faint">
+            {store.imageRole === 'keyframe'
+              ? 'video bắt đầu từ đúng ảnh này'
+              : mention2 === 'tag'
+                ? 'gọi bằng @tên trong prompt'
+                : 'gọi bằng [Image N] trong prompt'}
+          </span>
+        </div>
+      )}
 
       {/* Goi y mo khoa them model - de rieng mot dong cho de doc */}
       {hints.size > 0 && (
