@@ -30,7 +30,10 @@ WORKDIR /app
 
 # Chi cai dependency cua server (express), khong keo theo toolchain frontend
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
+# --ignore-scripts: package.json co postinstall chay build-catalog, nhung
+# scripts/ va spec/ chua duoc copy vao o buoc nay. catalog.json lay san
+# tu giai doan web ben duoi nen khong can chay lai.
+RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts && npm cache clean --force
 
 COPY server.mjs ./
 COPY scripts/ ./scripts/
