@@ -347,6 +347,64 @@ export function tagsUsedIn(prompt: string): Set<string> {
   return used;
 }
 
+/** Mot lan goi anh trong prompt, kem ket qua doi chieu voi anh dang dinh kem. */
+export interface MentionRef {
+  /** Doan chu nguyen ban trong prompt: "@boat" hoac "[Image 2]" */
+  raw: string;
+  kind: 'tag' | 'index';
+  /** Nhan hoac so thu tu */
+  key: string;
+  /** Co tro dung vao mot anh dang dinh kem khong */
+  resolved: boolean;
+  /** Anh tuong ung, neu tro dung */
+  asset?: AttachedAsset;
+  /** Vi sao khong tro dung duoc */
+  reason?: string;
+}
+
+/**
+ * Doi chieu moi lan goi anh trong prompt voi danh sach anh dang dinh kem.
+ *
+ * Nguoi dung can biet "@abc" hay "[Image 5]" co tro vao anh that khong -
+ * khong co doi chieu nay thi ho go sai ten va chi phat hien sau khi da tieu
+ * credit cho mot ket qua khong dung anh nao.
+ */
+export function parseMentions(prompt: string, refs: AttachedAsset[]): MentionRef[] {
+  const out: MentionRef[] = [];
+
+  for (const m of prompt.matchAll(/@([a-zA-Z][a-zA-Z0-9_]*)/g)) {
+    const key = m[1]!;
+    const asset = refs.find((a) => a.tag === key);
+    out.push({
+      raw: m[0],
+      kind: 'tag',
+      key,
+      resolved: !!asset,
+      asset,
+      reason: asset ? undefined : 'không có ảnh nào mang nhãn này',
+    });
+  }
+
+  for (const m of prompt.matchAll(/\[\s*Image\s*(\d+)\s*\]/gi)) {
+    const n = Number(m[1]);
+    const asset = refs[n - 1];
+    out.push({
+      raw: m[0],
+      kind: 'index',
+      key: String(n),
+      resolved: !!asset,
+      asset,
+      reason: asset
+        ? undefined
+        : refs.length === 0
+          ? 'chưa đính ảnh tham chiếu nào'
+          : `chỉ có ${refs.length} ảnh tham chiếu`,
+    });
+  }
+
+  return out;
+}
+
 export type FormValues = Record<string, unknown>;
 
 /**

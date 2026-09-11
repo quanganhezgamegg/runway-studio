@@ -18,6 +18,7 @@ import {
   availableImageRoles,
   durationChoices,
   mentionStyle,
+  parseMentions,
   roleLabel,
   supportsTags,
   tagsUsedIn,
@@ -40,7 +41,7 @@ export function Composer() {
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const [drag, setDrag] = useState(false);
   /** Vi tri dang go @ trong prompt, null = khong mo goi y. */
-  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const [mention, setMention] = useState<{ start: number; query: string; kind: 'tag' | 'index' } | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
 
   const targets = selectTargets(store);
@@ -210,40 +211,65 @@ export function Composer() {
     });
   }
 
-  /** Chen @tag vao prompt tai vi tri con tro. */
+  /** Cu phap goi mot anh, khac nhau theo model. */
+  const mentionTextFor = (asset: AttachedAsset) =>
+    mention2 === 'tag' ? `@${asset.tag}` : `[Image ${refIndex(asset.uri) + 1}]`;
+
+  /** Chen loi goi anh vao prompt, thay the doan dang go neu co. */
   function insertMention(asset: AttachedAsset, replaceFrom?: number) {
     const el = promptRef.current;
     const text = store.prompt;
     const from = replaceFrom ?? el?.selectionStart ?? text.length;
-    const to = el?.selectionEnd ?? from;
+    const to = replaceFrom != null ? (el?.selectionStart ?? from) : (el?.selectionEnd ?? from);
 
     const before = text.slice(0, from);
-    const after = text.slice(replaceFrom != null ? to : to);
+    const after = text.slice(to);
     const pad = before && !/\s$/.test(before) ? ' ' : '';
-    const next = `${before}${pad}@${asset.tag} ${after.replace(/^ /, '')}`;
+    const token = mentionTextFor(asset);
+    const next = `${before}${pad}${token} ${after.replace(/^ /, '')}`;
 
     store.setPrompt(next);
     setMention(null);
     requestAnimationFrame(() => {
-      const pos = before.length + pad.length + 1 + (asset.tag?.length ?? 0) + 1;
+      const pos = before.length + pad.length + token.length + 1;
       el?.focus();
       el?.setSelectionRange(pos, pos);
     });
   }
 
-  /** Sau moi lan go, kiem tra con tro co dang o sau mot @ nao khong. */
+  /**
+   * Sau moi lan go, kiem tra con tro co dang bat dau mot loi goi anh khong.
+   * Model dung @tag thi bat ky tu @; model dung [Image N] thi bat dau ngoac [.
+   */
   function detectMention(text: string, caret: number) {
-    if (!tagsOn || !taggable.length) return setMention(null);
+    if (!taggable.length || mention2 === 'none') return setMention(null);
     const upto = text.slice(0, caret);
-    const m = /@([a-z0-9_]*)$/i.exec(upto);
+
+    if (mention2 === 'tag') {
+      const m = /@([a-zA-Z0-9_]*)$/.exec(upto);
+      if (!m) return setMention(null);
+      setMention({ start: caret - m[0].length, query: m[1]!.toLowerCase(), kind: 'tag' });
+      setMentionIndex(0);
+      return;
+    }
+
+    // Cho phep go dan: "[", "[I", "[Image", "[Image 1"
+    const m = /\[(?:\s*i(?:m(?:a(?:g(?:e)?)?)?)?)?\s*(\d*)$/i.exec(upto);
     if (!m) return setMention(null);
-    setMention({ start: caret - m[0].length, query: m[1]!.toLowerCase() });
+    setMention({ start: caret - m[0].length, query: m[1] ?? '', kind: 'index' });
     setMentionIndex(0);
   }
 
-  const mentionMatches = mention
-    ? taggable.filter((a) => (a.tag ?? '').startsWith(mention.query))
-    : [];
+  const mentionMatches = !mention
+    ? []
+    : mention.kind === 'tag'
+      ? taggable.filter((a) => (a.tag ?? '').startsWith(mention.query))
+      : mention.query
+        ? taggable.filter((_, i) => String(i + 1).startsWith(mention.query))
+        : taggable;
+
+  /** Doi chieu moi loi goi trong prompt voi anh dang dinh kem. */
+  const mentions = useMemo(() => parseMentions(store.prompt, taggable), [store.prompt, taggable]);
 
   // --- Rang buoc: khoa nut Tao ngay thay vi de nguoi dung bam roi moi bao loi ---
   const violations = useMemo(
@@ -566,6 +592,7 @@ export function Composer() {
             <TagAutocomplete
               matches={mentionMatches}
               activeIndex={mentionIndex}
+              label={mentionTextFor}
               onPick={(a) => insertMention(a, mention.start)}
             />
           )}
@@ -634,6 +661,31 @@ export function Composer() {
           </Chip>
         )}
       </div>
+
+      {/* Doi chieu loi goi anh: cho biet cai nao tro dung anh that */}
+      {mentions.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {mentions.map((m, i) => (
+            <span
+              key={`${m.raw}-${i}`}
+              title={m.resolved ? m.asset?.name : m.reason}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] ${
+                m.resolved
+                  ? 'border-ok/40 bg-[#0f2018] text-ok'
+                  : 'border-err/50 bg-[#1d1314] text-err'
+              }`}
+            >
+              {m.resolved && m.asset?.preview && m.asset.kind === 'image' ? (
+                <img src={m.asset.preview} alt="" className="h-3.5 w-3.5 rounded-sm object-cover" />
+              ) : (
+                <span>{m.resolved ? '\u2713' : '\u2715'}</span>
+              )}
+              {m.raw}
+              {!m.resolved && <span className="font-sans text-[9.5px]">{m.reason}</span>}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Endpoint duoc suy ra + canh bao file thua */}
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-ink-faint">

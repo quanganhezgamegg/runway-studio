@@ -112,10 +112,13 @@ export function AttachmentTag({
 export function TagAutocomplete({
   matches,
   activeIndex,
+  label,
   onPick,
 }: {
   matches: AttachedAsset[];
   activeIndex: number;
+  /** Cu phap goi anh, khac nhau theo model: @ten hoac [Image N]. */
+  label: (asset: AttachedAsset) => string;
   onPick: (asset: AttachedAsset) => void;
 }) {
   if (!matches.length) return null;
@@ -145,7 +148,7 @@ export function TagAutocomplete({
               <span className="h-7 w-7 shrink-0 rounded bg-surface-2" />
             )}
             <span className="min-w-0 flex-1">
-              <span className="block font-mono text-[11.5px] text-accent">@{a.tag}</span>
+              <span className="block font-mono text-[11.5px] text-accent">{label(a)}</span>
               <span className="block truncate text-[10px] text-ink-faint">{a.name}</span>
             </span>
           </button>
