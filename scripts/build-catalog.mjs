@@ -13,6 +13,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { extractConstraints } from './extract-constraints.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -352,6 +353,9 @@ for (const [path, item] of Object.entries(spec.paths)) {
       hasModelField: !!props.model,
       modelOptions: !modelName && Array.isArray(modelSchema?.enum) ? modelSchema.enum : null,
       fields,
+      // Rang buoc loai tru, boc tu mo ta field vi spec khong dung
+      // tu khoa JSON Schema nao de dien chung
+      constraints: extractConstraints(fields),
     });
   }
 

@@ -7,7 +7,7 @@
  */
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, kindOfFile } from '@/api/client';
+import { api } from '@/api/client';
 import type { Field as FieldDef } from '@/lib/catalog';
 import {
   assignAssets,
@@ -21,6 +21,8 @@ import {
 } from '@/lib/catalog';
 import type { AttachedAsset } from '@/lib/catalog';
 import { AttachmentTag, TagAutocomplete } from './AttachmentTag';
+import { audioNotes, checkConstraints } from '@/lib/constraints';
+import { checkFile, cropPreview, probeFile } from '@/lib/media';
 import { attachedKinds, selectActive, selectTargets, useStore } from '@/store';
 import { Button, Chip, Field, Input, Select, fmt, ratioLabel, titleCase, toast } from './ui';
 
@@ -30,6 +32,7 @@ export function Composer() {
   const store = useStore();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
+  const lastFrameRef = useRef<HTMLInputElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const [drag, setDrag] = useState(false);
   /** Vi tri dang go @ trong prompt, null = khong mo goi y. */
@@ -72,20 +75,61 @@ export function Composer() {
 
   async function handleFiles(files: FileList | File[]) {
     for (const file of Array.from(files)) {
+      // Doc metadata roi kiem tra TRUOC khi upload: bat loi o day thay vi
+      // de Runway tu choi sau khi da tai len, hoac sau khi da tieu credit.
+      const info = await probeFile(file);
+      const issues = checkFile(file, info);
+
+      const blocking = issues.filter((i) => i.level === 'error');
+      if (blocking.length) {
+        toast(`${file.name}: ${blocking[0]!.message}`, 'err');
+        continue;
+      }
+      for (const w of issues) toast(`${file.name}: ${w.message}`);
+
       store.beginUpload();
       try {
         const { uri } = await api.upload(file);
         store.addAttachment({
           uri,
-          kind: kindOfFile(file),
+          kind: info.kind,
           name: file.name,
           preview: URL.createObjectURL(file),
+          width: info.width,
+          height: info.height,
+          duration: info.duration,
+          sizeBytes: info.sizeBytes,
+          mime: info.mime,
         });
       } catch (e) {
-        toast(e instanceof Error ? e.message : 'Tải lên thất bại', 'err');
+        toast(e instanceof Error ? e.message : 'Tai len that bai', 'err');
       } finally {
         store.endUpload();
       }
+    }
+  }
+
+  /** Chon anh lam khung hinh cuoi (muc A3 cua tai lieu). */
+  async function pickLastFrame(file: File) {
+    const info = await probeFile(file);
+    const blocking = checkFile(file, info).filter((i) => i.level === 'error');
+    if (blocking.length) return toast(blocking[0]!.message, 'err');
+
+    store.beginUpload();
+    try {
+      const { uri } = await api.upload(file);
+      store.setLastFrame({
+        uri,
+        kind: 'image',
+        name: file.name,
+        preview: URL.createObjectURL(file),
+        width: info.width,
+        height: info.height,
+      });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Tai len that bai', 'err');
+    } finally {
+      store.endUpload();
     }
   }
 
@@ -155,6 +199,34 @@ export function Composer() {
   const mentionMatches = mention
     ? taggable.filter((a) => (a.tag ?? '').startsWith(mention.query))
     : [];
+
+  // --- Rang buoc: khoa nut Tao ngay thay vi de nguoi dung bam roi moi bao loi ---
+  const violations = useMemo(
+    () =>
+      checkConstraints(variant, {
+        attachments: store.attachments,
+        lastFrame: store.lastFrame,
+        prompt: store.prompt,
+        values: store.values,
+      }),
+    [variant, store.attachments, store.lastFrame, store.prompt, store.values]
+  );
+  const notes = useMemo(() => audioNotes(variant, store.values), [variant, store.values]);
+  const blocked = violations.some((v) => v.level === 'block');
+
+  // Model nay co nhan khung hinh cuoi khong
+  const frameField = (variant?.fields ?? []).find((f) => f.control === 'asset' && f.supportsLastFrame);
+  const hasFirstFrame = store.attachments.some((a) => roles.get(a.uri) === frameField?.name);
+
+  // Anh khong dung ti le khung hinh se bi cat tu tam - phai cho thay truoc
+  const ratioValue = String(effectiveValue(
+    (variant?.fields ?? []).find((f) => f.name === 'ratio') ?? { name: 'ratio', required: false, description: '', control: 'text' },
+    store.values
+  ) ?? '');
+  const crops = store.attachments
+    .filter((a) => a.kind === 'image' && a.width && a.height)
+    .map((a) => ({ asset: a, crop: cropPreview({ kind: 'image', width: a.width, height: a.height, sizeBytes: a.sizeBytes ?? 0, mime: a.mime ?? '' }, ratioValue) }))
+    .filter((x) => x.crop);
 
   const busy = generate.isPending || store.uploading > 0;
 
@@ -254,6 +326,17 @@ export function Composer() {
             e.target.value = '';
           }}
         />
+        <input
+          ref={lastFrameRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void pickLastFrame(f);
+            e.target.value = '';
+          }}
+        />
       </div>
 
       {/* Goi y mo khoa them model - de rieng mot dong cho de doc */}
@@ -268,6 +351,72 @@ export function Composer() {
             >
               Đính {KIND_LABEL[kind]} để mở khoá <b className="font-medium text-ink-muted">{n}</b> model khác
             </button>
+          ))}
+        </div>
+      )}
+
+      {/* Khung hinh cuoi - chi hien voi model nhan no va da co khung dau */}
+      {frameField && hasFirstFrame && (
+        <div className="mb-2 flex items-center gap-2">
+          {store.lastFrame ? (
+            <>
+              <div className="relative h-10 w-[60px] overflow-hidden rounded border border-line">
+                {store.lastFrame.preview && (
+                  <img src={store.lastFrame.preview} alt="" className="h-full w-full object-cover" />
+                )}
+              </div>
+              <span className="font-mono text-[10px] text-ink-faint">khung cuối</span>
+              <button
+                type="button"
+                onClick={() => store.setLastFrame(null)}
+                className="text-[11px] text-ink-faint transition-colors hover:text-err"
+              >
+                bỏ
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => lastFrameRef.current?.click()}
+              className="rounded border border-dashed border-line px-2.5 py-1 text-[11px] text-ink-faint transition-colors hover:border-accent hover:text-accent"
+            >
+              + Thêm khung hình cuối
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Vi pham rang buoc + canh bao */}
+      {(violations.length > 0 || notes.length > 0 || crops.length > 0) && (
+        <div className="mb-2 flex flex-col gap-1.5">
+          {violations.map((v, i) => (
+            <div
+              key={`v${i}`}
+              className={`rounded-md border px-2.5 py-1.5 text-[11.5px] leading-snug ${
+                v.level === 'block'
+                  ? 'border-err/50 bg-[#1d1314] text-[#ffb4b4]'
+                  : 'border-warn/40 bg-[#1d1a10] text-warn'
+              }`}
+            >
+              {v.message}
+            </div>
+          ))}
+          {notes.map((n, i) => (
+            <div
+              key={`n${i}`}
+              className="rounded-md border border-warn/40 bg-[#1d1a10] px-2.5 py-1.5 text-[11.5px] leading-snug text-warn"
+            >
+              {n.message}
+            </div>
+          ))}
+          {crops.map(({ asset, crop }) => (
+            <div
+              key={asset.uri}
+              className="rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-[11.5px] leading-snug text-ink-muted"
+            >
+              "{asset.name}" không đúng tỉ lệ {ratioValue} — sẽ bị cắt {crop!.cropPercent}% theo
+              chiều {crop!.axis}, tính từ tâm ảnh.
+            </div>
           ))}
         </div>
       )}
@@ -336,9 +485,9 @@ export function Composer() {
         <Button
           type="submit"
           variant="primary"
-          disabled={busy || !active}
+          disabled={busy || !active || blocked}
           className="shrink-0 px-6"
-          title="Ctrl+Enter"
+          title={blocked ? 'Còn ràng buộc chưa thoả' : 'Ctrl+Enter'}
         >
           {generate.isPending ? 'Đang gửi…' : 'Tạo'}
         </Button>

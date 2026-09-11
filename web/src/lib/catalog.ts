@@ -54,6 +54,11 @@ export interface ModelVariant {
   hasModelField: boolean;
   modelOptions: string[] | null;
   fields: Field[];
+  /**
+   * Rang buoc loai tru, boc tu mo ta field trong spec.
+   * Kiem tra bang checkConstraints() trong lib/constraints.ts.
+   */
+  constraints?: unknown[];
 }
 
 export type EndpointKind = 'video' | 'image' | 'audio' | 'enhance' | 'recipe' | 'other';
@@ -241,6 +246,12 @@ export interface AttachedAsset {
   preview?: string;
   /** Nhan de goi lai anh trong prompt bang @tag. Chi mot so model ho tro. */
   tag?: string;
+  /** Metadata doc tu file truoc khi upload, dung de kiem tra rang buoc. */
+  width?: number;
+  height?: number;
+  duration?: number;
+  sizeBytes?: number;
+  mime?: string;
 }
 
 // ---------------------------------------------------------------------------
