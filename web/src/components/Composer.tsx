@@ -15,6 +15,8 @@ import {
   buildPayload,
   effectiveValue,
   missingRequired,
+  durationChoices,
+  mentionStyle,
   roleLabel,
   supportsTags,
   tagsUsedIn,
@@ -23,6 +25,7 @@ import type { AttachedAsset } from '@/lib/catalog';
 import { AttachmentTag, TagAutocomplete } from './AttachmentTag';
 import { audioNotes, checkConstraints } from '@/lib/constraints';
 import { checkFile, cropPreview, probeFile } from '@/lib/media';
+import { REJECTION_TIPS } from '@/lib/errors';
 import { attachedKinds, selectActive, selectTargets, useStore } from '@/store';
 import { Button, Chip, Field, Input, Select, fmt, ratioLabel, titleCase, toast } from './ui';
 
@@ -160,10 +163,30 @@ export function Composer() {
   );
   const unused = store.attachments.filter((a) => !roles.has(a.uri));
 
-  // Chi 8 model cua text_to_image nhan @tag
+  // Cach goi tham chieu: @tag (co truong tag) hay [Image N] (theo vi tri)
+  const mention2 = mentionStyle(variant);
   const tagsOn = supportsTags(variant);
   const usedTags = useMemo(() => tagsUsedIn(store.prompt), [store.prompt]);
   const taggable = store.attachments.filter((a) => roles.get(a.uri) === 'referenceImages');
+
+  /** Vi tri cua mot anh trong danh sach tham chieu (dung cho [Image N]). */
+  const refIndex = (uri: string) => taggable.findIndex((a) => a.uri === uri);
+
+  /** Chen mot doan text bat ky vao prompt tai vi tri con tro. */
+  function insertText(text: string) {
+    const el = promptRef.current;
+    const cur = store.prompt;
+    const from = el?.selectionStart ?? cur.length;
+    const before = cur.slice(0, from);
+    const pad = before && !/\s$/.test(before) ? ' ' : '';
+    const next = `${before}${pad}${text} ${cur.slice(from).replace(/^ /, '')}`;
+    store.setPrompt(next);
+    requestAnimationFrame(() => {
+      const pos = before.length + pad.length + text.length + 1;
+      el?.focus();
+      el?.setSelectionRange(pos, pos);
+    });
+  }
 
   /** Chen @tag vao prompt tai vi tri con tro. */
   function insertMention(asset: AttachedAsset, replaceFrom?: number) {
@@ -292,6 +315,15 @@ export function Composer() {
                     onRename={(tag) => store.setAttachmentTag(a.uri, tag)}
                     onInsert={() => insertMention(a)}
                   />
+                ) : mention2 === 'index' && isRef ? (
+                  <button
+                    type="button"
+                    onClick={() => insertText(`[Image ${refIndex(a.uri) + 1}]`)}
+                    title={`Chèn [Image ${refIndex(a.uri) + 1}] vào prompt`}
+                    className="w-full truncate rounded bg-surface-2 px-1 py-0.5 text-center font-mono text-[9.5px] text-ink-faint transition-colors hover:bg-line hover:text-ink-muted"
+                  >
+                    [Image {refIndex(a.uri) + 1}]
+                  </button>
                 ) : (
                   <div
                     className={`truncate text-center text-[9.5px] ${
@@ -500,7 +532,14 @@ export function Composer() {
           <Field label="Model" hint={`${targets.length} hợp lệ với input hiện tại`}>
             <Select
               value={active?.variant.model ?? ''}
-              onChange={(e) => store.setModel(e.target.value)}
+              onChange={(e) => {
+                const dropped = store.setModel(e.target.value);
+                if (dropped.length) {
+                  toast(
+                    `Đã bỏ ${dropped.map(titleCase).join(', ')} — model mới không nhận giá trị cũ`
+                  );
+                }
+              }}
             >
               {targets.map((t) => (
                 <option key={`${t.endpoint.path}:${t.variant.model}`} value={t.variant.model}>
@@ -519,6 +558,15 @@ export function Composer() {
         {chipFields.map((f) => (
           <ChipControl key={f.name} field={f} />
         ))}
+
+        <Chip label="?" value="mẹo">
+          <div className="text-[12px] font-medium text-ink">Ba nguyên nhân hay bị từ chối</div>
+          <ul className="mt-1.5 list-disc pl-4 text-[11.5px] leading-relaxed text-ink-muted">
+            {REJECTION_TIPS.map((t) => (
+              <li key={t}>{t}</li>
+            ))}
+          </ul>
+        </Chip>
 
         {restFields.length > 0 && (
           <Chip label="⚙" value={`${restFields.length} tham số`}>
@@ -597,7 +645,28 @@ function Control({ field }: { field: FieldDef }) {
       );
     }
 
-    case 'number':
+    case 'number': {
+      // E3: thoi luong phai chon tu danh sach, khong nhap tu do
+      const choices = durationChoices(field);
+      if (choices) {
+        return (
+          <Field label={titleCase(field.name)} hint="giây">
+            <Select
+              value={String(value ?? '')}
+              onChange={(e) =>
+                setValue(field.name, e.target.value === '' ? undefined : Number(e.target.value))
+              }
+            >
+              {!field.required && <option value="">— mặc định —</option>}
+              {choices.map((c) => (
+                <option key={c} value={c}>
+                  {c} giây
+                </option>
+              ))}
+            </Select>
+          </Field>
+        );
+      }
       return (
         <Field label={titleCase(field.name)} hint={hint}>
           <div className="flex gap-2">
@@ -623,6 +692,7 @@ function Control({ field }: { field: FieldDef }) {
           </div>
         </Field>
       );
+    }
 
     case 'boolean':
       return (

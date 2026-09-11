@@ -5,6 +5,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { api, credits, kindOfUrl } from '@/api/client';
 import type { Job } from '@/api/client';
 import { useStore } from '@/store';
+import { billedLabel, explainFailure } from '@/lib/errors';
 import { Button, Progress, StatePill, fmt, timeAgo, toast } from './ui';
 
 export function Gallery({ jobs, loading }: { jobs: Job[]; loading: boolean }) {
@@ -71,13 +72,31 @@ export function Gallery({ jobs, loading }: { jobs: Job[]; loading: boolean }) {
 function Card({ job, onOpen }: { job: Job; onOpen: (url: string) => void }) {
   const qc = useQueryClient();
   const loadFrom = useStore((s) => s.loadFrom);
-  const outputs = job.output ?? [];
+  // Uu tien file server da tu luu: link cua Runway co han, file cuc bo thi khong
+  const saved = job.localOutput ?? [];
+  const outputs = saved.length ? saved : (job.output ?? []);
+  const isSaved = saved.length > 0;
   const spent = credits(job.cost) ?? credits(job.estimatedCost);
   const running = job.state === 'RUNNING' || job.state === 'SUBMITTED' || job.state === 'QUEUED';
 
   const save = useMutation({
     mutationFn: (i: number) => api.save({ url: outputs[i]!, jobId: job.jobId, index: i }),
     onSuccess: (r) => toast(`Đã lưu: ${r.file}`, 'ok'),
+    onError: (e: Error) => toast(e.message, 'err'),
+  });
+
+  // Dich ma loi ky thuat thanh thong bao nguoi dung (muc K cua tai lieu)
+  const failure = job.state === 'FAILED' ? explainFailure(job.failureCode, job.error) : null;
+
+  const retry = useMutation({
+    mutationFn: () => {
+      if (!job.payload) throw new Error('Không còn tham số của lần tạo này');
+      return api.generate({ path: job.path, payload: job.payload, title: job.title });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['jobs'] });
+      toast('Đã gửi lại', 'ok');
+    },
     onError: (e: Error) => toast(e.message, 'err'),
   });
 
@@ -135,8 +154,8 @@ function Card({ job, onOpen }: { job: Job; onOpen: (url: string) => void }) {
                 <Progress value={job.state === 'QUEUED' ? 0 : job.progress} />
               </div>
             ) : (
-              <span className="px-4 text-center font-mono text-[10px] leading-relaxed text-err">
-                {job.error ?? 'không có kết quả'}
+              <span className="px-3 text-center text-[10.5px] leading-relaxed text-err">
+                {failure?.message ?? 'không có kết quả'}
               </span>
             )}
           </div>
@@ -163,7 +182,35 @@ function Card({ job, onOpen }: { job: Job; onOpen: (url: string) => void }) {
           <span>@{job.user}</span>
           <span>{timeAgo(job.createdAt)}</span>
           {spent != null && <span>{fmt(spent)} cr</span>}
+          {isSaved && <span className="text-ok">đã lưu</span>}
+          {failure && (
+            <span className={failure.billed === 'charged' ? 'text-warn' : ''}>
+              {billedLabel(failure.billed)}
+            </span>
+          )}
         </div>
+
+        {/* Loi: thong diep + viec can lam + goi y, khong hien ma ky thuat */}
+        {failure && (
+          <div className="mt-2 rounded-md border border-err/40 bg-[#1d1314] px-2.5 py-2">
+            <div className="text-[11.5px] leading-snug text-[#ffb4b4]">{failure.message}</div>
+            {failure.action && (
+              <div className="mt-1 text-[10.5px] leading-snug text-ink-muted">{failure.action}</div>
+            )}
+            {failure.tips && (
+              <ul className="mt-1.5 list-disc pl-4 text-[10.5px] leading-snug text-ink-muted">
+                {failure.tips.map((t) => (
+                  <li key={t}>{t}</li>
+                ))}
+              </ul>
+            )}
+            {failure.suggestAltModel && (
+              <div className="mt-1.5 text-[10.5px] text-ink-muted">
+                Thử model khác trong cùng nhóm — danh sách ở chip "model".
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="mt-2 flex flex-wrap gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
           {running && (
@@ -171,11 +218,26 @@ function Card({ job, onOpen }: { job: Job; onOpen: (url: string) => void }) {
               Huỷ
             </Button>
           )}
-          {outputs.map((_, i) => (
-            <Button key={i} size="sm" variant="ghost" onClick={() => save.mutate(i)}>
-              {outputs.length > 1 ? `Lưu ${i + 1}` : 'Lưu'}
+          {isSaved ? (
+            <a
+              href={outputs[0]}
+              download
+              className="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-medium text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+            >
+              Tải về
+            </a>
+          ) : (
+            outputs.map((_, i) => (
+              <Button key={i} size="sm" variant="ghost" onClick={() => save.mutate(i)}>
+                {outputs.length > 1 ? `Lưu ${i + 1}` : 'Lưu'}
+              </Button>
+            ))
+          )}
+          {failure?.retryable && job.payload && (
+            <Button size="sm" variant="ghost" onClick={() => retry.mutate()} disabled={retry.isPending}>
+              {retry.isPending ? 'Đang gửi…' : 'Thử lại'}
             </Button>
-          ))}
+          )}
           {job.payload && (
             <Button
               size="sm"

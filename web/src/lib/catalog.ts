@@ -332,6 +332,40 @@ export function defaultFor(f: Field): unknown {
   return undefined;
 }
 
+/**
+ * Danh sach gia tri roi rac cho truong `duration`.
+ *
+ * Tai lieu (muc E3): "Chon tu danh sach cac gia tri co san, khong phai nhap
+ * tu do." Spec cho mot so model la enum san, mot so chi cho min/max - voi
+ * nhom sau ta sinh day so nguyen trong khoang do.
+ */
+export function durationChoices(f: Field): string[] | null {
+  if (f.name !== 'duration') return null;
+  if (f.control === 'select') return f.options ?? null;
+  if (f.control !== 'number' || f.min == null || f.max == null) return null;
+
+  const out: string[] = [];
+  for (let v = Math.ceil(f.min); v <= Math.floor(f.max); v++) out.push(String(v));
+  return out.length ? out : null;
+}
+
+/**
+ * Cach goi tham chieu trong prompt, khac nhau theo model (muc B2).
+ *
+ * Model co truong `tag` tren anh tham chieu thi goi bang @ten.
+ * Model khong co thi tham chieu duoc danh so theo vi tri, goi bang [Image N].
+ */
+export type MentionStyle = 'tag' | 'index' | 'none';
+
+export function mentionStyle(variant: ModelVariant | undefined): MentionStyle {
+  if (!variant) return 'none';
+  const refField = variant.fields.find(
+    (f) => f.control === 'asset-list' && f.asset === 'image'
+  );
+  if (!refField) return 'none';
+  return (refField.itemFields ?? []).some((s2) => s2.name === 'tag') ? 'tag' : 'index';
+}
+
 /** Gia tri thuc su se duoc gui di cho mot truong. */
 export function effectiveValue(f: Field, values: FormValues): unknown {
   const v = values[f.name];

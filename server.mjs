@@ -248,6 +248,11 @@ function jobView(j) {
     jobId: j.jobId, taskId: j.taskId, state: j.state, path: j.path, model: j.model,
     title: j.title, promptText: j.promptText, user: j.user, queuePosition: j.queuePosition ?? null,
     progress: j.progress ?? null, output: j.output ?? null, error: j.error ?? null,
+    // Giu rieng ma loi: giao dien dich no thanh thong bao cho nguoi dung,
+    // gop vao `error` thi mat thong tin de phan loai
+    failureCode: j.failureCode ?? null,
+    // Duong dan cuc bo sau khi tu luu - dung cai nay thay link Runway da het han
+    localOutput: j.localOutput ?? null,
     estimatedCost: j.estimatedCost ?? null, cost: j.cost ?? null,
     createdAt: j.createdAt, startedAt: j.startedAt ?? null, finishedAt: j.finishedAt ?? null,
     // Can cho nut "Dung lai" - thieu cai nay thi job cua phien hien tai
@@ -278,7 +283,9 @@ function pushJobUpdate(j) {
   upsertHistory({
     jobId: j.jobId, taskId: j.taskId, path: j.path, model: j.model, title: j.title,
     promptText: j.promptText, user: j.user, state: j.state, output: j.output ?? null,
-    error: j.error ?? null, cost: j.cost ?? null, estimatedCost: j.estimatedCost ?? null,
+    error: j.error ?? null, failureCode: j.failureCode ?? null,
+    localOutput: j.localOutput ?? null,
+    cost: j.cost ?? null, estimatedCost: j.estimatedCost ?? null,
     createdAt: j.createdAt, finishedAt: j.finishedAt ?? null, payload: j.payload,
   });
 }
@@ -340,6 +347,14 @@ async function dispatch() {
       } else {
         job.state = 'FAILED';
         job.error = e.message + (e.details ? ` - ${JSON.stringify(e.details).slice(0, 300)}` : '');
+        // Gan ma rieng cho loi luc GUI yeu cau. Khong co ma thi giao dien
+        // se doan sai thanh "loi he thong", trong khi day la tham so sai
+        // ma nguoi dung sua duoc.
+        job.failureCode =
+          e.status === 400 ? 'REQUEST.VALIDATION'
+          : e.status === 401 || e.status === 403 ? 'REQUEST.AUTH'
+          : e.status >= 500 ? 'REQUEST.SERVER'
+          : 'REQUEST.OTHER';
         job.finishedAt = new Date().toISOString();
         pushJobUpdate(job);
         setImmediate(dispatch);
@@ -377,7 +392,8 @@ async function pollTask(job) {
       job.cost = task.cost ?? null;
     } else if (task.status === 'FAILED') {
       job.state = 'FAILED';
-      job.error = task.failure || task.failureCode || 'Task that bai';
+      job.error = task.failure || 'Task that bai';
+      job.failureCode = task.failureCode ?? null;
       job.cost = task.cost ?? null;
     } else if (task.status === 'CANCELLED') {
       job.state = 'CANCELLED';
@@ -391,6 +407,10 @@ async function pollTask(job) {
   pushJobUpdate(job);
   refreshTier();
   setImmediate(dispatch);
+
+  // Tu luu ket qua ve dia truoc khi link Runway het han.
+  // Khong await: giai phong slot hang doi ngay, tai ve chay nen.
+  if (job.state === 'SUCCEEDED') void autoSaveOutputs(job);
 }
 
 // ---------------------------------------------------------------------------
@@ -601,12 +621,13 @@ app.delete('/api/history/:jobId', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// --- Luu output ve may chu (link Runway het han sau ~24-48h) ---
-app.post('/api/save', wrap(async (req, res) => {
-  const { url, jobId, index = 0 } = req.body || {};
-  if (!url) return res.status(400).json({ error: 'Thieu `url`' });
+/**
+ * Tai mot output ve OUT_DIR, tra ve ten file cuc bo.
+ * Dung chung cho ca tu dong luu (sau khi task xong) va nut Luu thu cong.
+ */
+async function downloadOutput(url, jobId, index) {
   const r = await fetch(url);
-  if (!r.ok) return res.status(502).json({ error: `Tai that bai (${r.status})` });
+  if (!r.ok) throw Object.assign(new Error(`Tai that bai (${r.status})`), { status: 502 });
 
   let ext = extname(new URL(url).pathname);
   if (!ext) {
@@ -616,6 +637,42 @@ app.post('/api/save', wrap(async (req, res) => {
   }
   const name = `${String(jobId || Date.now()).replace(/[^a-zA-Z0-9_-]/g, '')}_${index}${ext}`;
   await pipeline(Readable.fromWeb(r.body), createWriteStream(join(OUT_DIR, name)));
+  return name;
+}
+
+/**
+ * Tu dong luu ket qua ngay khi task xong.
+ *
+ * Link cua Runway nhung JWT co han (quan sat thuc te ~48h). Tai lieu yeu cau
+ * "he thong phai tu luu video lai va cho nguoi dung tai ve bat cu luc nao,
+ * khong phu thuoc link goc" - nen khong the de nguoi dung tu bam Luu.
+ *
+ * Chay khong chan luong chinh: loi tai ve khong duoc lam job thanh FAILED.
+ */
+async function autoSaveOutputs(job) {
+  if (!Array.isArray(job.output) || !job.output.length) return;
+
+  const saved = [];
+  for (let i = 0; i < job.output.length; i++) {
+    try {
+      const file = await downloadOutput(job.output[i], job.jobId, i);
+      saved.push(`/outputs/${file}`);
+    } catch (e) {
+      console.warn(`[autosave] ${job.jobId}#${i}: ${e.message}`);
+    }
+  }
+
+  if (saved.length) {
+    job.localOutput = saved;
+    pushJobUpdate(job);
+  }
+}
+
+// --- Luu output ve may chu (link Runway het han sau ~24-48h) ---
+app.post('/api/save', wrap(async (req, res) => {
+  const { url, jobId, index = 0 } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'Thieu `url`' });
+  const name = await downloadOutput(url, jobId, index);
   res.json({ ok: true, file: name, localUrl: `/outputs/${name}` });
 }));
 

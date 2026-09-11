@@ -30,7 +30,8 @@ interface State {
   setAttachmentTag: (uri: string, tag: string) => void;
   setLastFrame: (a: AttachedAsset | null) => void;
   setPrompt: (p: string) => void;
-  setModel: (m: string) => void;
+  /** Tra ve ten cac tham so bi bo vi khong con hop le voi model moi. */
+  setModel: (m: string) => string[];
   setValue: (name: string, v: unknown) => void;
   resetValues: () => void;
   beginUpload: () => void;
@@ -96,7 +97,45 @@ export const useStore = create<State>((set, get) => ({
 
   setLastFrame: (lastFrame) => set({ lastFrame }),
   setPrompt: (prompt) => set({ prompt }),
-  setModel: (modelName) => set({ modelName, values: {} }),
+  /**
+   * Doi model. Giu lai nhung gia tri VAN con hop le thay vi xoa sach, va tra
+   * ve danh sach da bo de giao dien bao cho nguoi dung biet da doi gi
+   * (muc D2 cua tai lieu).
+   */
+  setModel: (modelName) => {
+    const s = get();
+    const next = selectTargets({ ...s, modelName }).find((t) => t.variant.model === modelName);
+    if (!next) {
+      set({ modelName, values: {} });
+      return [];
+    }
+
+    const kept: FormValues = {};
+    const dropped: string[] = [];
+
+    for (const [name, value] of Object.entries(s.values)) {
+      const f = next.variant.fields.find((x) => x.name === name);
+      if (!f) {
+        dropped.push(name);
+        continue;
+      }
+      // Gia tri nam ngoai danh sach cho phep -> bo
+      if (f.control === 'select' && f.options && !f.options.includes(String(value)) && !f.allowCustom) {
+        dropped.push(name);
+        continue;
+      }
+      if (f.control === 'number' && typeof value === 'number') {
+        if ((f.min != null && value < f.min) || (f.max != null && value > f.max)) {
+          dropped.push(name);
+          continue;
+        }
+      }
+      kept[name] = value;
+    }
+
+    set({ modelName, values: kept });
+    return dropped;
+  },
   setValue: (name, v) => set((s) => ({ values: { ...s.values, [name]: v } })),
   resetValues: () => set({ values: {} }),
 

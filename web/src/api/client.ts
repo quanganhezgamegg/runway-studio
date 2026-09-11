@@ -25,6 +25,10 @@ export interface Job {
   progress: number | null;
   output: string[] | null;
   error: string | null;
+  /** Ma loi ky thuat cua Runway - dich sang thong bao nguoi dung o lib/errors.ts */
+  failureCode: string | null;
+  /** File da duoc server tu luu. Dung cai nay thay link Runway da het han. */
+  localOutput: string[] | null;
   estimatedCost: Cost;
   cost: Cost;
   createdAt: string;
