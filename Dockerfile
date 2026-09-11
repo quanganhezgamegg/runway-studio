@@ -43,9 +43,15 @@ COPY spec/ ./spec/
 COPY --from=web /build/public/catalog.json ./public/catalog.json
 COPY --from=web /build/public/dist ./public/dist
 
-# data/ va outputs/ gan volume o docker-compose de song qua lan build lai
-RUN mkdir -p data outputs && chown -R node:node /app
-USER node
+# su-exec de entrypoint ha quyen tu root xuong node sau khi chown volume
+RUN apk add --no-cache su-exec
+
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh  && mkdir -p data outputs  && chown -R node:node /app
+
+# KHONG dat USER node o day: entrypoint can quyen root de chown volume do
+# nen tang gan vao, roi tu ha quyen xuong node truoc khi chay app.
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 EXPOSE 3000
 
