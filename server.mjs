@@ -29,8 +29,15 @@ const HOST = process.env.HOST || '0.0.0.0'; // mo ra LAN cho noi bo
 const API_BASE = 'https://api.dev.runwayml.com/v1';
 const API_VERSION = '2024-11-06';
 
-const DATA_DIR = join(__dirname, 'data');
-const OUT_DIR = join(__dirname, 'outputs');
+/**
+ * Duong dan luu tru, cho phep doi bang bien moi truong.
+ *
+ * Can thiet vi mot so nen tang (Railway) chi cho gan MOT volume moi service.
+ * Luc do gan volume vao /app/data roi dat OUTPUTS_DIR=/app/data/outputs
+ * la ca hai thu deu nam trong volume do.
+ */
+const DATA_DIR = process.env.DATA_DIR || join(__dirname, 'data');
+const OUT_DIR = process.env.OUTPUTS_DIR || join(__dirname, 'outputs');
 const HISTORY_FILE = join(DATA_DIR, 'history.json');
 const USERS_FILE = join(DATA_DIR, 'users.json');
 const SECRET_FILE = join(DATA_DIR, 'secret.key');
@@ -664,6 +671,8 @@ app.listen(PORT, HOST, () => {
   console.log(`  Local    : http://localhost:${PORT}`);
   for (const ip of localIPs()) console.log(`  LAN      : http://${ip}:${PORT}`);
   console.log(`  API key  : ${API_KEY ? `${API_KEY.slice(0, 8)}...${API_KEY.slice(-4)} OK` : 'KHONG TIM THAY'}`);
+  console.log(`  Data     : ${DATA_DIR}`);
+  console.log(`  Outputs  : ${OUT_DIR}`);
   const admin = USERS.find((u) => u.role === 'admin');
   if (admin) console.log(`  Admin    : ${admin.name} / ma dang nhap: ${admin.code}`);
 

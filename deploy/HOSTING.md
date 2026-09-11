@@ -24,17 +24,26 @@ Cả ba đều nhận `Dockerfile` sẵn có.
 
 1. [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo** → chọn `runway-studio`
 2. Railway tự nhận `Dockerfile`
-3. Tab **Variables**, thêm:
+3. Tab **Variables** → **Raw Editor**, dán:
    ```
    RUNWAY_API_KEY=key_...
    SESSION_SECRET=<64 ký tự hex ngẫu nhiên>
+   OUTPUTS_DIR=/app/data/outputs
    TRUST_PROXY=1
    FORCE_SECURE_COOKIE=1
    ```
    Sinh secret: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
-4. Tab **Settings → Volumes**, tạo hai volume:
-   - mount `/app/data` — người dùng, lịch sử
-   - mount `/app/outputs` — file đã lưu
+4. Tab **Settings → Volumes** → tạo **một** volume, mount path `/app/data`
+
+   Railway chỉ cho một volume mỗi service, nên `OUTPUTS_DIR` ở trên đẩy thư
+   mục file kết quả vào trong volume đó. Thiếu biến này thì người dùng và lịch
+   sử được giữ, nhưng file bấm "Lưu" mất sau mỗi lần deploy.
+
+   Kiểm tra bằng log khởi động — phải thấy:
+   ```
+   Data     : /app/data
+   Outputs  : /app/data/outputs
+   ```
 5. **Settings → Networking → Generate Domain** (hoặc gắn domain riêng)
 6. Xem mã admin ở tab **Deployments → View Logs**, tìm dòng `Admin`
 
