@@ -43,6 +43,17 @@ const USERS_FILE = join(DATA_DIR, 'users.json');
 const SECRET_FILE = join(DATA_DIR, 'secret.key');
 for (const d of [DATA_DIR, OUT_DIR]) if (!existsSync(d)) mkdirSync(d, { recursive: true });
 
+/** Duoi file tuong ung MIME type - Runway suy loai media tu duoi file. */
+const MIME_EXT = {
+  'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp',
+  'image/gif': '.gif', 'image/avif': '.avif',
+  'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm',
+  'audio/mpeg': '.mp3', 'audio/wav': '.wav', 'audio/x-wav': '.wav',
+  'audio/mp4': '.m4a', 'audio/aac': '.aac', 'audio/ogg': '.ogg',
+  'audio/webm': '.weba', 'audio/flac': '.flac',
+};
+const extFromMime = (mime) => MIME_EXT[String(mime).split(';')[0].trim().toLowerCase()] ?? '.bin';
+
 const readJson = (f, fallback) => {
   try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return fallback; }
 };
@@ -538,13 +549,30 @@ app.get('/api/stream', (req, res) => {
 // --- Upload (client gui raw bytes, ten file o header) ---
 app.post('/api/upload', express.raw({ type: '*/*', limit: '200mb' }), wrap(async (req, res) => {
   // Client ma hoa ten file (co the chua dau tieng Viet) de header hop le
-  const rawName = req.get('X-Filename') || 'upload.bin';
+  const rawName = req.get('X-Filename') || 'upload';
   let filename;
   try { filename = decodeURIComponent(rawName); } catch { filename = rawName; }
   const contentType = req.get('X-Content-Type') || 'application/octet-stream';
   if (!req.body?.length) return res.status(400).json({ error: 'Body rong' });
 
-  const init = await runway('/uploads', { method: 'POST', body: { filename, type: contentType } });
+  // Runway suy loai media tu DUOI FILE, khong tu content-type. File khong co
+  // duoi (vd: anh dan tu clipboard ten "blob") se bi tu choi, nen tu bu duoi vao.
+  if (!/\.[a-z0-9]{2,5}$/i.test(filename)) {
+    filename = `${filename || 'upload'}${extFromMime(contentType)}`;
+  }
+  // filename co rang buoc minLength 3 / maxLength 255 trong spec
+  if (filename.length < 3) filename = `file-${filename}`;
+  if (filename.length > 255) {
+    const ext = extname(filename);
+    filename = filename.slice(0, 255 - ext.length) + ext;
+  }
+
+  const init = await runway('/uploads', {
+    method: 'POST',
+    // `type` la LOAI UPLOAD, enum chi nhan "ephemeral" - khong phai MIME type.
+    // Gui MIME type vao day se bi tu choi 400 "expected \"ephemeral\"".
+    body: { filename, type: 'ephemeral' },
+  });
   const form = new FormData();
   for (const [k, v] of Object.entries(init.fields || {})) form.append(k, v);
   form.append('file', new Blob([req.body], { type: contentType }), filename);
