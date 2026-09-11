@@ -7,9 +7,16 @@
 
 services:
   studio:
-    # Khong publish port ra host nua - chi cloudflared trong mang noi bo
-    # cua compose goi vao duoc.
-    ports: !override []
+    # Chi mo tren localhost cua may chu, DONG duong LAN.
+    #
+    # Bat buoc phai dong, khong phai de cho chac: ben duoi bat TRUST_PROXY=1
+    # de gioi han login doc duoc IP that tu Cloudflare. Neu LAN van vao truc
+    # tiep duoc thi nguoi trong mang tu dat X-Forwarded-For la vuot qua gioi
+    # han do. Mo mot duong la vo hieu duong con lai.
+    #
+    # Sau buoc nay dong nghiep vao bang ten mien Cloudflare, khong phai IP LAN.
+    ports: !override
+      - "127.0.0.1:3000:3000"
     environment:
       RUNWAY_API_KEY: ${RUNWAY_API_KEY:?Thieu RUNWAY_API_KEY}
       PORT: "3000"
