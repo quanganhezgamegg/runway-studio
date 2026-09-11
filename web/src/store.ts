@@ -1,0 +1,152 @@
+/**
+ * Trang thai giao dien.
+ *
+ * Diem mau chot: `outputKind` + `attachments` la nguon su that.
+ * Endpoint va danh sach model KHONG luu trong store - chung duoc suy ra
+ * mien phi tu hai thu tren (xem selectTargets). Nho vay khong bao gio co
+ * chuyen store giu mot model khong hop le voi input hien tai.
+ */
+import { create } from 'zustand';
+import type { AssetKind, AttachedAsset, Catalog, Endpoint, FormValues, OutputKind, Target } from '@/lib/catalog';
+import { resolveTargets } from '@/lib/catalog';
+
+interface State {
+  catalog: Catalog | null;
+  outputKind: OutputKind;
+  /** Khi chon mot cong cu chuyen biet (Upscale, recipe…) thi bo qua suy luan. */
+  toolPath: string | null;
+  attachments: AttachedAsset[];
+  lastFrame: AttachedAsset | null;
+  prompt: string;
+  modelName: string | null;
+  values: FormValues;
+  uploading: number;
+
+  setCatalog: (c: Catalog) => void;
+  setOutputKind: (k: OutputKind) => void;
+  setTool: (path: string | null) => void;
+  addAttachment: (a: AttachedAsset) => void;
+  removeAttachment: (uri: string) => void;
+  setLastFrame: (a: AttachedAsset | null) => void;
+  setPrompt: (p: string) => void;
+  setModel: (m: string) => void;
+  setValue: (name: string, v: unknown) => void;
+  resetValues: () => void;
+  beginUpload: () => void;
+  endUpload: () => void;
+  loadFrom: (path: string, model: string, payload: Record<string, unknown>) => void;
+}
+
+export const useStore = create<State>((set, get) => ({
+  catalog: null,
+  outputKind: 'video',
+  toolPath: null,
+  attachments: [],
+  lastFrame: null,
+  prompt: '',
+  modelName: null,
+  values: {},
+  uploading: 0,
+
+  setCatalog: (catalog) => set({ catalog }),
+
+  // Doi loai ket qua -> model cu gan nhu chac chan khong con hop le
+  setOutputKind: (outputKind) => set({ outputKind, toolPath: null, modelName: null, values: {} }),
+
+  setTool: (toolPath) => set({ toolPath, modelName: null, values: {} }),
+
+  addAttachment: (a) =>
+    set((s) => ({
+      attachments: [...s.attachments.filter((x) => x.uri !== a.uri), a],
+      // Them file co the doi endpoint duoc suy ra -> bo model cu
+      modelName: null,
+    })),
+
+  removeAttachment: (uri) =>
+    set((s) => ({
+      attachments: s.attachments.filter((x) => x.uri !== uri),
+      modelName: null,
+    })),
+
+  setLastFrame: (lastFrame) => set({ lastFrame }),
+  setPrompt: (prompt) => set({ prompt }),
+  setModel: (modelName) => set({ modelName, values: {} }),
+  setValue: (name, v) => set((s) => ({ values: { ...s.values, [name]: v } })),
+  resetValues: () => set({ values: {} }),
+
+  beginUpload: () => set((s) => ({ uploading: s.uploading + 1 })),
+  endUpload: () => set((s) => ({ uploading: Math.max(0, s.uploading - 1) })),
+
+  /** "Dùng lại": nap prompt + tham so tu mot job cu. */
+  loadFrom: (path, model, payload) => {
+    const catalog = get().catalog;
+    const ep = catalog?.endpoints.find((e) => e.path === path);
+    if (!ep) return;
+
+    const kind: OutputKind | null =
+      ep.kind === 'video' ? 'video' : ep.kind === 'image' ? 'image' : ep.kind === 'audio' ? 'audio' : null;
+
+    // Bo cac field asset ra khoi values - chung song o `attachments`
+    const variant = ep.models.find((m) => m.model === model);
+    const assetNames = new Set(
+      (variant?.fields ?? [])
+        .filter((f) => f.control === 'asset' || f.control === 'asset-list')
+        .map((f) => f.name)
+    );
+    const values: FormValues = {};
+    for (const [k, v] of Object.entries(payload)) {
+      if (k === 'model' || assetNames.has(k)) continue;
+      values[k] = v;
+    }
+
+    set({
+      outputKind: kind ?? get().outputKind,
+      toolPath: kind ? null : path,
+      modelName: model,
+      prompt: typeof payload.promptText === 'string' ? payload.promptText : '',
+      values,
+    });
+  },
+}));
+
+// ---------------------------------------------------------------------------
+// Selector suy ra - khong luu trong store
+// ---------------------------------------------------------------------------
+
+/** Tap loai asset dang dinh kem. */
+export function attachedKinds(attachments: AttachedAsset[]): Set<AssetKind> {
+  return new Set(attachments.map((a) => a.kind));
+}
+
+/** Moi to hop (endpoint, model) hop le voi input hien tai. */
+export function selectTargets(s: State): Target[] {
+  if (!s.catalog) return [];
+
+  // Cong cu chuyen biet: khong suy ra, lay thang endpoint do
+  if (s.toolPath) {
+    const ep = s.catalog.endpoints.find((e) => e.path === s.toolPath);
+    if (!ep) return [];
+    return ep.models.map((variant) => ({ endpoint: ep, variant, score: 0 }));
+  }
+
+  return resolveTargets(s.catalog, s.outputKind, attachedKinds(s.attachments));
+}
+
+/** To hop dang duoc chon (theo modelName, mac dinh la cai dau tien). */
+export function selectActive(s: State): Target | null {
+  const targets = selectTargets(s);
+  if (!targets.length) return null;
+  if (s.modelName) {
+    const hit = targets.find((t) => t.variant.model === s.modelName);
+    if (hit) return hit;
+  }
+  return targets[0] ?? null;
+}
+
+/** Cac endpoint chuyen biet hien o nhom "Công cụ". */
+export function selectTools(catalog: Catalog | null): Endpoint[] {
+  if (!catalog) return [];
+  return catalog.endpoints.filter(
+    (e) => e.kind === 'enhance' || e.kind === 'recipe' || e.kind === 'other'
+  );
+}

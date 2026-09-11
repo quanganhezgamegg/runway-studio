@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Nen toi lam mac dinh: day la cong cu media, danh gia mau va do sang
+   cua video phai tren nen toi. Mau nhan ho phach lay tu anh sang tungsten
+   trong truong quay, tach han khoi mau ngu nghia (ok/warn/err). */
+:root {
+  --ground: #0e1012;
+  --surface: #16191d;
+  --surface-2: #1d2126;
+  --line: #282d34;
+  --line-soft: #1f242a;
+  --ink: #e6e9ed;
+  --ink-muted: #939ba5;
+  --ink-faint: #6b737d;
+  --accent: #e8a24a;
+  --accent-soft: #3a2c18;
+  --ok: #5fbf8f;
+  --warn: #d9a441;
+  --err: #e2695f;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thanh cuon mong, khong pha bo cuc */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; border: 3px solid var(--ground); }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+
+/* Focus nhin thay duoc o moi noi */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, rgba(232, 162, 74, 0.14), transparent);
+  animation: shimmer 1.6s ease-in-out infinite;
+}

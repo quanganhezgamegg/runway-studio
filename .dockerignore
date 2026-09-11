@@ -1,0 +1,13 @@
+node_modules
+web/node_modules
+public/dist
+data
+outputs
+.git
+.gitignore
+*.log
+*.md
+Dockerfile
+docker-compose.yml
+.env
+.env.*

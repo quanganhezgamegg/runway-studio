@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+web/node_modules/
+
+# Build output - sinh lai bang `cd web && npm run build`
+public/dist/
+
+# Catalog sinh tu spec - `npm run catalog`
+public/catalog.json
+
+# DU LIEU NHAY CAM - khong bao gio commit
+# data/ chua users.json (ma truy cap cua tung nguoi) va secret.key
+data/
+outputs/
+.env
+.env.*
+!.env.example
+
+# Linh tinh
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# TypeScript incremental build
+*.tsbuildinfo

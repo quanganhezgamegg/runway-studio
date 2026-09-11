@@ -1,0 +1,29 @@
+services:
+  studio:
+    build: .
+    image: runway-studio
+    container_name: runway-studio
+    restart: unless-stopped
+    ports:
+      # Chi mo ra LAN. Doi thanh "127.0.0.1:3000:3000" neu chay sau reverse proxy.
+      - "3000:3000"
+    environment:
+      # Key KHONG nam trong image. Doc tu file .env canh docker-compose.yml
+      RUNWAY_API_KEY: ${RUNWAY_API_KEY:?Thieu RUNWAY_API_KEY - tao file .env truoc}
+      PORT: "3000"
+      HOST: "0.0.0.0"
+    volumes:
+      # Nguoi dung, lich su, ma truy cap - phai song qua lan build lai
+      - studio-data:/app/data
+      # File ket qua da tai ve
+      - studio-outputs:/app/outputs
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/me').then(r=>process.exit(r.status===401||r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  studio-data:
+  studio-outputs:

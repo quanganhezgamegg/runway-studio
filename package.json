@@ -1,0 +1,16 @@
+{
+  "name": "runway-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local web UI for the Runway API - key stays server-side",
+  "scripts": {
+    "start": "node server.mjs",
+    "catalog": "node scripts/build-catalog.mjs",
+    "postinstall": "node scripts/build-catalog.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
