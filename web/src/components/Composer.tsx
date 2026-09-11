@@ -5,11 +5,22 @@
  * Dong chu nho duoi cung hien endpoint that su se duoc goi, de nguoi dung
  * hieu vi sao danh sach model thay doi khi ho dinh them file.
  */
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, kindOfFile } from '@/api/client';
 import type { Field as FieldDef } from '@/lib/catalog';
-import { blockedTargets, buildPayload, effectiveValue, missingRequired } from '@/lib/catalog';
+import {
+  assignAssets,
+  blockedTargets,
+  buildPayload,
+  effectiveValue,
+  missingRequired,
+  roleLabel,
+  supportsTags,
+  tagsUsedIn,
+} from '@/lib/catalog';
+import type { AttachedAsset } from '@/lib/catalog';
+import { AttachmentTag, TagAutocomplete } from './AttachmentTag';
 import { attachedKinds, selectActive, selectTargets, useStore } from '@/store';
 import { Button, Chip, Field, Input, Select, fmt, ratioLabel, titleCase, toast } from './ui';
 
@@ -19,7 +30,11 @@ export function Composer() {
   const store = useStore();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
   const [drag, setDrag] = useState(false);
+  /** Vi tri dang go @ trong prompt, null = khong mo goi y. */
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
 
   const targets = selectTargets(store);
   const active = selectActive(store);
@@ -92,13 +107,54 @@ export function Composer() {
     ? blockedTargets(store.catalog, store.outputKind, attachedKinds(store.attachments))
     : new Map();
 
-  // Asset dinh kem nhung model dang chon khong dung den
-  const acceptedKinds = new Set(
-    (variant?.fields ?? [])
-      .filter((f) => f.control === 'asset' || f.control === 'asset-list')
-      .flatMap((f) => f.assetKinds ?? (f.asset ? [f.asset] : []))
+  // Vai tro thuc te cua tung asset voi model dang chon.
+  // Khong co map nay thi nguoi dung khong biet anh minh dinh vao dang lam gi:
+  // khung dau cua video? anh tham chieu goi bang @tag? hay bi bo qua?
+  const roles = useMemo(
+    () => (variant ? assignAssets(variant, store.attachments) : new Map<string, string>()),
+    [variant, store.attachments]
   );
-  const unused = store.attachments.filter((a) => !acceptedKinds.has(a.kind));
+  const unused = store.attachments.filter((a) => !roles.has(a.uri));
+
+  // Chi 8 model cua text_to_image nhan @tag
+  const tagsOn = supportsTags(variant);
+  const usedTags = useMemo(() => tagsUsedIn(store.prompt), [store.prompt]);
+  const taggable = store.attachments.filter((a) => roles.get(a.uri) === 'referenceImages');
+
+  /** Chen @tag vao prompt tai vi tri con tro. */
+  function insertMention(asset: AttachedAsset, replaceFrom?: number) {
+    const el = promptRef.current;
+    const text = store.prompt;
+    const from = replaceFrom ?? el?.selectionStart ?? text.length;
+    const to = el?.selectionEnd ?? from;
+
+    const before = text.slice(0, from);
+    const after = text.slice(replaceFrom != null ? to : to);
+    const pad = before && !/\s$/.test(before) ? ' ' : '';
+    const next = `${before}${pad}@${asset.tag} ${after.replace(/^ /, '')}`;
+
+    store.setPrompt(next);
+    setMention(null);
+    requestAnimationFrame(() => {
+      const pos = before.length + pad.length + 1 + (asset.tag?.length ?? 0) + 1;
+      el?.focus();
+      el?.setSelectionRange(pos, pos);
+    });
+  }
+
+  /** Sau moi lan go, kiem tra con tro co dang o sau mot @ nao khong. */
+  function detectMention(text: string, caret: number) {
+    if (!tagsOn || !taggable.length) return setMention(null);
+    const upto = text.slice(0, caret);
+    const m = /@([a-z0-9_]*)$/i.exec(upto);
+    if (!m) return setMention(null);
+    setMention({ start: caret - m[0].length, query: m[1]!.toLowerCase() });
+    setMentionIndex(0);
+  }
+
+  const mentionMatches = mention
+    ? taggable.filter((a) => (a.tag ?? '').startsWith(mention.query))
+    : [];
 
   const busy = generate.isPending || store.uploading > 0;
 
@@ -123,37 +179,66 @@ export function Composer() {
       }`}
     >
       {/* Dinh kem */}
-      <div className="mb-2.5 flex flex-wrap items-center gap-2">
-        {store.attachments.map((a) => (
-          <div
-            key={a.uri}
-            className="group relative h-14 w-14 overflow-hidden rounded-lg border border-line bg-surface-2"
-            title={a.name}
-          >
-            {a.kind === 'image' && a.preview ? (
-              <img src={a.preview} alt="" className="h-full w-full object-cover" />
-            ) : a.kind === 'video' && a.preview ? (
-              <video src={a.preview} muted className="h-full w-full object-cover" />
-            ) : (
-              <div className="grid h-full place-items-center text-[10px] text-ink-faint">
-                {KIND_LABEL[a.kind]}
+      <div className="mb-2 flex flex-wrap items-start gap-2">
+        {store.attachments.map((a) => {
+          const role = roles.get(a.uri);
+          const isRef = role === 'referenceImages';
+          return (
+            <div key={a.uri} className="w-[84px]">
+              <div
+                className={`group relative h-14 w-full overflow-hidden rounded-lg border bg-surface-2 ${
+                  role ? 'border-line' : 'border-warn/60'
+                }`}
+                title={a.name}
+              >
+                {a.kind === 'image' && a.preview ? (
+                  <img src={a.preview} alt="" className="h-full w-full object-cover" />
+                ) : a.kind === 'video' && a.preview ? (
+                  <video src={a.preview} muted className="h-full w-full object-cover" />
+                ) : (
+                  <div className="grid h-full place-items-center text-[10px] text-ink-faint">
+                    {KIND_LABEL[a.kind]}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => store.removeAttachment(a.uri)}
+                  className="absolute right-0.5 top-0.5 grid h-4 w-4 place-items-center rounded bg-black/70 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100"
+                  aria-label={`Bỏ ${a.name}`}
+                >
+                  ✕
+                </button>
               </div>
-            )}
-            <button
-              type="button"
-              onClick={() => store.removeAttachment(a.uri)}
-              className="absolute right-0.5 top-0.5 grid h-4 w-4 place-items-center rounded bg-black/70 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100"
-              aria-label={`Bỏ ${a.name}`}
-            >
-              ✕
-            </button>
-          </div>
-        ))}
+
+              {/* Vai tro thuc te cua anh nay voi model dang chon */}
+              <div className="mt-1">
+                {tagsOn && isRef ? (
+                  <AttachmentTag
+                    asset={a}
+                    used={usedTags.has(a.tag ?? '')}
+                    taken={store.attachments.filter((x) => x.uri !== a.uri).map((x) => x.tag ?? '')}
+                    onRename={(tag) => store.setAttachmentTag(a.uri, tag)}
+                    onInsert={() => insertMention(a)}
+                  />
+                ) : (
+                  <div
+                    className={`truncate text-center text-[9.5px] ${
+                      role ? 'text-ink-faint' : 'text-warn'
+                    }`}
+                    title={role ? roleLabel(role) : 'Model này không dùng file này'}
+                  >
+                    {role ? roleLabel(role) : 'không dùng'}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
 
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          className="grid h-14 w-14 place-items-center rounded-lg border border-dashed border-line text-ink-faint transition-colors hover:border-accent hover:text-accent"
+          className="grid h-14 w-[84px] place-items-center rounded-lg border border-dashed border-line text-ink-faint transition-colors hover:border-accent hover:text-accent"
           aria-label="Thêm file"
         >
           {store.uploading > 0 ? <span className="text-[10px]">…</span> : '+'}
@@ -189,25 +274,65 @@ export function Composer() {
 
       {/* Prompt + nut tao */}
       <div className="flex items-stretch gap-2">
-        <textarea
-          id="prompt"
-          rows={1}
-          value={store.prompt}
-          onChange={(e) => {
-            store.setPrompt(e.target.value);
-            e.target.style.height = 'auto';
-            e.target.style.height = `${Math.min(e.target.scrollHeight, 168)}px`;
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              generate.mutate();
+        <div className="relative flex-1">
+          <textarea
+            id="prompt"
+            ref={promptRef}
+            rows={1}
+            value={store.prompt}
+            onChange={(e) => {
+              store.setPrompt(e.target.value);
+              detectMention(e.target.value, e.target.selectionStart);
+              e.target.style.height = 'auto';
+              e.target.style.height = `${Math.min(e.target.scrollHeight, 168)}px`;
+            }}
+            onClick={(e) => detectMention(store.prompt, e.currentTarget.selectionStart)}
+            onBlur={() => setMention(null)}
+            onKeyDown={(e) => {
+              // Dieu huong danh sach goi y @tag truoc, roi moi den Ctrl+Enter
+              if (mention && mentionMatches.length) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  return setMentionIndex((i) => (i + 1) % mentionMatches.length);
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  return setMentionIndex(
+                    (i) => (i - 1 + mentionMatches.length) % mentionMatches.length
+                  );
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault();
+                  const pick = mentionMatches[mentionIndex];
+                  if (pick) insertMention(pick, mention.start);
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  return setMention(null);
+                }
+              }
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                generate.mutate();
+              }
+            }}
+            placeholder={
+              tagsOn && taggable.length
+                ? 'Mô tả điều bạn muốn tạo…   gõ @ để gọi ảnh tham chiếu'
+                : 'Mô tả điều bạn muốn tạo…'
             }
-          }}
-          placeholder="Mô tả điều bạn muốn tạo…"
-          title="Ctrl+Enter để tạo"
-          className="min-h-[44px] flex-1 resize-none rounded-lg border border-line bg-surface-2 px-3 py-2.5 text-[13.5px] leading-relaxed text-ink outline-none transition-colors focus:border-accent"
-        />
+            title="Ctrl+Enter để tạo"
+            className="min-h-[44px] w-full resize-none rounded-lg border border-line bg-surface-2 px-3 py-2.5 text-[13.5px] leading-relaxed text-ink outline-none transition-colors focus:border-accent"
+          />
+          {mention && (
+            <TagAutocomplete
+              matches={mentionMatches}
+              activeIndex={mentionIndex}
+              onPick={(a) => insertMention(a, mention.start)}
+            />
+          )}
+        </div>
         <Button
           type="submit"
           variant="primary"

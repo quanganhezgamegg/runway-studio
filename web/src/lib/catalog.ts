@@ -239,6 +239,66 @@ export interface AttachedAsset {
   name: string;
   /** blob URL de xem truoc, chi ton tai o phien hien tai */
   preview?: string;
+  /** Nhan de goi lai anh trong prompt bang @tag. Chi mot so model ho tro. */
+  tag?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Nhan @tag cho anh tham chieu
+// ---------------------------------------------------------------------------
+
+/**
+ * Rang buoc tu spec: ^[a-z][a-z0-9_]+$, dai 3-16 ky tu.
+ * Bat dau bang chu cai, chi chu thuong / so / gach duoi.
+ */
+export const TAG_PATTERN = /^[a-z][a-z0-9_]+$/;
+export const TAG_MIN = 3;
+export const TAG_MAX = 16;
+
+const stripDiacritics = (s: string) =>
+  s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'd');
+
+/**
+ * Bien ten file thanh nhan hop le.
+ * "ảnh thử nghiệm.png" -> "anh_thu_nghiem"
+ */
+export function sanitizeTag(input: string): string {
+  let t = stripDiacritics(input)
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{1,5}$/, '')  // bo duoi file
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^[^a-z]+/, '')          // phai bat dau bang chu cai
+    .replace(/_{2,}/g, '_')
+    .replace(/_+$/, '')
+    .slice(0, TAG_MAX);
+
+  if (t.length < TAG_MIN) t = `ref${t}`.slice(0, TAG_MAX);
+  return t;
+}
+
+export function tagError(tag: string): string | null {
+  if (tag.length < TAG_MIN || tag.length > TAG_MAX) {
+    return `Phải dài ${TAG_MIN}–${TAG_MAX} ký tự`;
+  }
+  if (!TAG_PATTERN.test(tag)) {
+    return 'Bắt đầu bằng chữ cái, chỉ dùng chữ thường, số và gạch dưới';
+  }
+  return null;
+}
+
+/** Model dang chon co nhan @tag cho anh tham chieu khong. */
+export function supportsTags(variant: ModelVariant | undefined): boolean {
+  if (!variant) return false;
+  return variant.fields.some(
+    (f) => f.control === 'asset-list' && (f.itemFields ?? []).some((s) => s.name === 'tag')
+  );
+}
+
+/** Cac nhan dang duoc goi trong prompt - de bao nhan nao chua dung. */
+export function tagsUsedIn(prompt: string): Set<string> {
+  const used = new Set<string>();
+  for (const m of prompt.matchAll(/@([a-z][a-z0-9_]*)/g)) used.add(m[1]!);
+  return used;
 }
 
 export type FormValues = Record<string, unknown>;
@@ -271,6 +331,56 @@ export function effectiveValue(f: Field, values: FormValues): unknown {
  * Gan asset dang dinh kem vao dung field cua variant, roi tron voi gia tri form.
  * Field asset don lay cai dau tien cung loai; field danh sach lay tat ca.
  */
+/**
+ * Phan bo asset dang dinh kem vao cac field cua variant.
+ * Tra ve uri -> ten field, de giao dien noi ro tung anh dang duoc dung lam gi
+ * (khung dau? anh tham chieu?) thay vi de nguoi dung doan.
+ *
+ * Dung chung voi buildPayload nen hai ben khong bao gio lech nhau.
+ */
+export function assignAssets(
+  variant: ModelVariant,
+  attachments: AttachedAsset[]
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const used = new Set<AttachedAsset>();
+
+  for (const f of variant.fields) {
+    if (f.control === 'asset') {
+      const pick = attachments.find((a) => kindsOf(f).includes(a.kind) && !used.has(a));
+      if (!pick) continue;
+      used.add(pick);
+      map.set(pick.uri, f.name);
+    } else if (f.control === 'asset-list') {
+      const picks = attachments.filter((a) => kindsOf(f).includes(a.kind) && !used.has(a));
+      const limited = f.maxItems ? picks.slice(0, f.maxItems) : picks;
+      for (const p of limited) {
+        used.add(p);
+        map.set(p.uri, f.name);
+      }
+    }
+  }
+  return map;
+}
+
+/** Nhan doc duoc cho vai tro cua mot field asset. */
+export function roleLabel(fieldName: string): string {
+  const map: Record<string, string> = {
+    promptImage: 'khung đầu',
+    promptVideo: 'video nguồn',
+    videoUri: 'video nguồn',
+    referenceImages: 'ảnh tham chiếu',
+    references: 'tham chiếu',
+    referenceVideos: 'video tham chiếu',
+    referenceAudio: 'âm thanh tham chiếu',
+    referenceAudios: 'âm thanh tham chiếu',
+    character: 'nhân vật',
+    reference: 'video diễn xuất',
+    media: 'nguồn',
+  };
+  return map[fieldName] ?? fieldName;
+}
+
 export function buildPayload(
   variant: ModelVariant,
   values: FormValues,
@@ -280,14 +390,14 @@ export function buildPayload(
   const payload: Record<string, unknown> = {};
   if (variant.hasModelField) payload.model = variant.model;
 
-  const used = new Set<AttachedAsset>();
+  const assigned = assignAssets(variant, attachments);
+  const forField = (name: string) => attachments.filter((a) => assigned.get(a.uri) === name);
 
   for (const f of variant.fields) {
     // --- Field nhan 1 asset ---
     if (f.control === 'asset') {
-      const pick = attachments.find((a) => a.kind === f.asset && !used.has(a));
+      const pick = forField(f.name)[0];
       if (!pick) continue;
-      used.add(pick);
 
       // promptImage ho tro [{uri, position}] khi co khung hinh cuoi
       if (f.name === 'promptImage' && lastFrame) {
@@ -295,24 +405,36 @@ export function buildPayload(
           { uri: pick.uri, position: 'first' },
           { uri: lastFrame.uri, position: 'last' },
         ];
-      } else {
-        payload[f.name] = pick.uri;
+        continue;
       }
+
+      // Asset boc trong object co the: `character` cua act_two, `media` cua
+      // speech_to_speech. Gui chuoi uri tran vao day se bi tu choi.
+      if (f.wrap === 'object') {
+        const branch = f.variants?.find((v) => v.asset === pick.kind) ?? f.variants?.[0];
+        payload[f.name] = branch?.type ? { type: branch.type, uri: pick.uri } : { uri: pick.uri };
+        continue;
+      }
+
+      payload[f.name] = pick.uri;
       continue;
     }
 
     // --- Field nhan danh sach asset ---
     if (f.control === 'asset-list') {
-      const picks = attachments.filter((a) => a.kind === f.asset && !used.has(a));
-      if (!picks.length) continue;
-      const limited = f.maxItems ? picks.slice(0, f.maxItems) : picks;
-      for (const p of limited) used.add(p);
+      const limited = forField(f.name);
+      if (!limited.length) continue;
 
       payload[f.name] = limited.map((p) => {
         const item: Record<string, unknown> = { uri: p.uri };
-        // Field phu bat buoc cua tung item (vd: `type` cua referenceAudio)
         for (const sub of f.itemFields ?? []) {
-          const v = (values[`${f.name}.${p.uri}.${sub.name}`] ?? values[`${f.name}.${sub.name}`]);
+          // `tag` song tren chinh asset (nguoi dung dat trong composer),
+          // khong nam trong values chung
+          if (sub.name === 'tag') {
+            if (p.tag) item.tag = p.tag;
+            continue;
+          }
+          const v = values[`${f.name}.${p.uri}.${sub.name}`] ?? values[`${f.name}.${sub.name}`];
           if (v != null && v !== '') item[sub.name] = v;
         }
         return item;

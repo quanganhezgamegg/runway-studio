@@ -8,7 +8,7 @@
  */
 import { create } from 'zustand';
 import type { AssetKind, AttachedAsset, Catalog, Endpoint, FormValues, OutputKind, Target } from '@/lib/catalog';
-import { resolveTargets } from '@/lib/catalog';
+import { resolveTargets, sanitizeTag, TAG_MAX } from '@/lib/catalog';
 
 interface State {
   catalog: Catalog | null;
@@ -27,6 +27,7 @@ interface State {
   setTool: (path: string | null) => void;
   addAttachment: (a: AttachedAsset) => void;
   removeAttachment: (uri: string) => void;
+  setAttachmentTag: (uri: string, tag: string) => void;
   setLastFrame: (a: AttachedAsset | null) => void;
   setPrompt: (p: string) => void;
   setModel: (m: string) => void;
@@ -35,6 +36,23 @@ interface State {
   beginUpload: () => void;
   endUpload: () => void;
   loadFrom: (path: string, model: string, payload: Record<string, unknown>) => void;
+}
+
+/**
+ * Sinh nhan khong trung voi cac nhan dang co.
+ * Trung thi them so vao cuoi, van giu trong gioi han 16 ky tu cua spec.
+ */
+function uniqueTag(name: string, existing: AttachedAsset[]): string {
+  const taken = new Set(existing.map((a) => a.tag).filter(Boolean) as string[]);
+  const base = sanitizeTag(name);
+  if (!taken.has(base)) return base;
+
+  for (let i = 2; i < 100; i++) {
+    const suffix = String(i);
+    const candidate = base.slice(0, TAG_MAX - suffix.length) + suffix;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return base;
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -56,16 +74,24 @@ export const useStore = create<State>((set, get) => ({
   setTool: (toolPath) => set({ toolPath, modelName: null, values: {} }),
 
   addAttachment: (a) =>
-    set((s) => ({
-      attachments: [...s.attachments.filter((x) => x.uri !== a.uri), a],
-      // Them file co the doi endpoint duoc suy ra -> bo model cu
-      modelName: null,
-    })),
+    set((s) => {
+      const others = s.attachments.filter((x) => x.uri !== a.uri);
+      return {
+        attachments: [...others, { ...a, tag: a.tag ?? uniqueTag(a.name, others) }],
+        // Them file co the doi endpoint duoc suy ra -> bo model cu
+        modelName: null,
+      };
+    }),
 
   removeAttachment: (uri) =>
     set((s) => ({
       attachments: s.attachments.filter((x) => x.uri !== uri),
       modelName: null,
+    })),
+
+  setAttachmentTag: (uri, tag) =>
+    set((s) => ({
+      attachments: s.attachments.map((a) => (a.uri === uri ? { ...a, tag } : a)),
     })),
 
   setLastFrame: (lastFrame) => set({ lastFrame }),
