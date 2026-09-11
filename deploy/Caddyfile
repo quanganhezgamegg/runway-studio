@@ -1,0 +1,38 @@
+# Dung khi can mot URL cong khai thuc su (vd: cho khach xem).
+# Caddy tu xin va gia han chung chi Let's Encrypt.
+#
+# Thay studio.tenmien.com bang ten mien that, tro A record ve IP cua VPS.
+
+studio.tenmien.com {
+	encode zstd gzip
+
+	# HSTS: buoc trinh duyet chi dung HTTPS voi ten mien nay
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	# File ket qua co the lon - noi thoi gian cho
+	handle /outputs/* {
+		reverse_proxy studio:3000 {
+			transport http {
+				response_header_timeout 300s
+			}
+		}
+	}
+
+	# SSE cho hang doi: PHAI tat buffering, neu khong client khong nhan
+	# duoc cap nhat trang thai job theo thoi gian thuc
+	handle /api/stream {
+		reverse_proxy studio:3000 {
+			flush_interval -1
+			transport http {
+				read_timeout 24h
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy studio:3000
+	}
+}

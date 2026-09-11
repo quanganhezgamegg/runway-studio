@@ -36,6 +36,54 @@ Trên Windows có thể double-click **`start.bat`**.
 
 ---
 
+## Host lên server để truy cập từ xa
+
+Xác thực của app là **mã chia sẻ** — ai lộ mã là vào được và tiêu credit. Nên **đừng phơi thẳng ra internet**. Hai đường an toàn:
+
+### Cách 1 — Cloudflare Tunnel + Access (khuyên dùng)
+
+Không mở port nào. `cloudflared` tự gọi ra Cloudflare nên không có kết nối vào. Cloudflare Access đặt SSO (Google / email OTP) ở phía trước, request chưa qua thì chưa tới được app — mã truy cập của app thành lớp thứ hai chứ không phải lớp duy nhất.
+
+1. Vào [Cloudflare Zero Trust](https://one.dash.cloudflare.com) → **Networks → Tunnels → Create a tunnel** → chọn **Cloudflared**.
+2. Copy token, thêm vào `.env`:
+   ```
+   TUNNEL_TOKEN=eyJhIjoi...
+   ```
+3. Ở tab **Public Hostname** của tunnel, trỏ subdomain của bạn tới `http://studio:3000`.
+4. Chạy:
+   ```bash
+   docker compose -f docker-compose.yml -f deploy/docker-compose.tunnel.yml up -d
+   ```
+5. **Quan trọng** — bật Access: **Zero Trust → Access → Applications → Add an application → Self-hosted**, chọn domain vừa tạo, thêm policy `Emails ending in @congty.com` hoặc danh sách email cụ thể.
+
+Miễn phí tới 50 người.
+
+### Cách 2 — VPS + Caddy, có URL công khai
+
+Dùng khi cần URL thật cho khách xem. Caddy tự xin và gia hạn chứng chỉ Let's Encrypt.
+
+1. Sửa tên miền trong `deploy/Caddyfile`, trỏ A record về IP của VPS.
+2. Mở port 80 và 443 trên firewall VPS.
+3. Chạy:
+   ```bash
+   docker compose -f docker-compose.yml -f deploy/docker-compose.public.yml up -d
+   ```
+
+Đường này app **chỉ còn mã truy cập che chắn**. Nếu chọn nó, ít nhất hãy dùng mã dài hơn: sửa `randomBytes(4)` thành `randomBytes(16)` trong `server.mjs`.
+
+### Hai biến môi trường bắt buộc khi chạy sau proxy
+
+Cả hai file compose trên đã đặt sẵn:
+
+- `TRUST_PROXY=1` — để giới hạn số lần thử login đọc được IP thật. **Không bật khi chạy trực tiếp**, vì lúc đó client tự đặt `X-Forwarded-For` là vượt được giới hạn.
+- `FORCE_SECURE_COOKIE=1` — gắn cờ `Secure` cho cookie phiên. Chỉ bật khi thật sự có HTTPS, nếu không trình duyệt bỏ qua cookie và không đăng nhập được.
+
+### Đã bịt trước khi cho host
+
+- `/outputs/*` trước đây phục vụ **không cần đăng nhập** — tên file chứa jobId đoán được nên ai cũng tải được nội dung team đã tạo. Giờ yêu cầu phiên hợp lệ.
+- `/api/login` trước đây **không giới hạn số lần thử**. Giờ sai 5 lần là khoá theo IP, thời gian chờ tăng dần 30s → 60s → … tối đa 15 phút. Mã đúng cũng không vượt được khoá, nếu không thì khoá vô nghĩa.
+- Thêm `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, bỏ `X-Powered-By`.
+
 ## API key
 
 Key **chỉ tồn tại ở server**, trình duyệt không bao giờ nhận được. Server tìm theo thứ tự:

@@ -1,0 +1,29 @@
+# Cloudflare Tunnel: truy cap tu xa ma KHONG mo port nao ra internet.
+# cloudflared tu goi ra Cloudflare, khong co ket noi vao.
+#
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.tunnel.yml up -d
+#
+# Can TUNNEL_TOKEN trong .env (lay o buoc 2 trong README, muc "Host len server").
+
+services:
+  studio:
+    # Khong publish port ra host nua - chi cloudflared trong mang noi bo
+    # cua compose goi vao duoc.
+    ports: !override []
+    environment:
+      RUNWAY_API_KEY: ${RUNWAY_API_KEY:?Thieu RUNWAY_API_KEY}
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      # Sau Cloudflare thi X-Forwarded-For dang tin -> gioi han login theo IP that
+      TRUST_PROXY: "1"
+      # Cloudflare luon phuc vu HTTPS -> cookie phien gan co Secure
+      FORCE_SECURE_COOKIE: "1"
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: runway-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:?Thieu TUNNEL_TOKEN}
+    depends_on:
+      studio:
+        condition: service_healthy

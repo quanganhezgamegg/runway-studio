@@ -1,0 +1,37 @@
+# URL cong khai qua Caddy + Let's Encrypt.
+#
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.public.yml up -d
+#
+# Truoc khi chay: sua ten mien trong deploy/Caddyfile va tro A record ve VPS.
+# Can mo port 80 va 443 tren firewall cua VPS.
+
+services:
+  studio:
+    # Chi Caddy goi vao duoc, khong phoi ra host
+    ports: !override []
+    environment:
+      RUNWAY_API_KEY: ${RUNWAY_API_KEY:?Thieu RUNWAY_API_KEY}
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      TRUST_PROXY: "1"
+      FORCE_SECURE_COOKIE: "1"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: runway-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      studio:
+        condition: service_healthy
+
+volumes:
+  caddy-data:
+  caddy-config:

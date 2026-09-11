@@ -350,24 +350,81 @@ async function pollTask(job) {
 // App
 // ---------------------------------------------------------------------------
 const app = express();
-app.set('trust proxy', true);
+
+// Chi tin X-Forwarded-* khi that su nam sau reverse proxy. Bat vo dieu kien
+// thi client tu dat X-Forwarded-For la qua duoc moi gioi han theo IP.
+// Dat TRUST_PROXY=1 khi chay sau Caddy/nginx/Cloudflare.
+if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
+
+app.disable('x-powered-by');
+
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
+});
+
 app.use(express.json({ limit: '25mb' }));
 
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) =>
   res.status(e.status || 500).json({ error: e.message, details: e.details ?? null })
 );
 
+// --- Chong do ma truy cap ---
+// Ma chi 8 ky tu hex. Khong gioi han thi ke tan cong cu ban lien tuc,
+// nhat la khi app mo ra internet.
+const LOGIN_FAILS = new Map(); // ip -> { count, until }
+const MAX_FAILS = 5;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, rec] of LOGIN_FAILS) if (rec.until && rec.until < now - 3600_000) LOGIN_FAILS.delete(ip);
+}, 600_000).unref();
+
+function loginGate(req, res, next) {
+  const rec = LOGIN_FAILS.get(req.ip);
+  if (rec?.until && Date.now() < rec.until) {
+    const secs = Math.ceil((rec.until - Date.now()) / 1000);
+    return res.status(429).json({ error: `Sai quá nhiều lần. Thử lại sau ${secs} giây.` });
+  }
+  next();
+}
+
+/** Cookie chi gan Secure khi that su chay tren HTTPS, neu khong trinh duyet se bo qua. */
+function sessionCookie(name) {
+  const secure = process.env.FORCE_SECURE_COOKIE === '1';
+  return [
+    `rs_session=${makeToken(name)}`,
+    'HttpOnly',
+    'SameSite=Lax',
+    'Path=/',
+    `Max-Age=${30 * 24 * 3600}`,
+    secure ? 'Secure' : null,
+  ].filter(Boolean).join('; ');
+}
+
 // --- Auth ---
-app.post('/api/login', wrap(async (req, res) => {
+app.post('/api/login', loginGate, wrap(async (req, res) => {
   const code = String(req.body?.code || '').trim();
   reloadUsers();
   const user = USERS.find((u) => u.code === code);
-  if (!user) return res.status(401).json({ error: 'Ma truy cap khong dung' });
 
-  res.setHeader(
-    'Set-Cookie',
-    `rs_session=${makeToken(user.name)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 3600}`
-  );
+  if (!user) {
+    const rec = LOGIN_FAILS.get(req.ip) ?? { count: 0, until: 0 };
+    rec.count += 1;
+    if (rec.count >= MAX_FAILS) {
+      // Cho tang dan: 30s, 60s, 120s... toi da 15 phut
+      const wait = Math.min(30_000 * 2 ** (rec.count - MAX_FAILS), 900_000);
+      rec.until = Date.now() + wait;
+    }
+    LOGIN_FAILS.set(req.ip, rec);
+    console.warn(`[auth] ma sai tu ${req.ip} (lan ${rec.count})`);
+    return res.status(401).json({ error: 'Ma truy cap khong dung' });
+  }
+
+  LOGIN_FAILS.delete(req.ip);
+  res.setHeader('Set-Cookie', sessionCookie(user.name));
   res.json({ name: user.name, role: user.role || 'member' });
 }));
 
@@ -531,7 +588,10 @@ const CATALOG_FILE = join(__dirname, 'public', 'catalog.json');
 // ma khong can build lai frontend
 app.get('/catalog.json', (_req, res) => res.sendFile(CATALOG_FILE));
 
-app.use('/outputs', express.static(OUT_DIR));
+// File ket qua PHAI yeu cau dang nhap. Ten file chua jobId co the doan duoc,
+// de mo thi bat ky ai cung tai duoc noi dung team da tao.
+app.use('/outputs', requireAuth, express.static(OUT_DIR));
+
 app.use(express.static(DIST));
 
 // SPA fallback - dat cuoi cung, sau moi route /api
