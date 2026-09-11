@@ -203,6 +203,9 @@ function jobView(j) {
     progress: j.progress ?? null, output: j.output ?? null, error: j.error ?? null,
     estimatedCost: j.estimatedCost ?? null, cost: j.cost ?? null,
     createdAt: j.createdAt, startedAt: j.startedAt ?? null, finishedAt: j.finishedAt ?? null,
+    // Can cho nut "Dung lai" - thieu cai nay thi job cua phien hien tai
+    // khong nap lai duoc tham so, trong khi job trong lich su thi duoc
+    payload: j.payload ?? null,
   };
 }
 

@@ -244,6 +244,30 @@ export interface AttachedAsset {
 export type FormValues = Record<string, unknown>;
 
 /**
+ * Gia tri mac dinh cho truong BAT BUOC ma nguoi dung chua dong den.
+ *
+ * Khong co cai nay thi `ratio` va `duration` cua gen4.5 bo trong, bam Tao
+ * la bao "thieu truong bat buoc" du nguoi dung khong lam gi sai.
+ * Dung chung cho ca hien thi chip lan dung payload de hai noi khong lech nhau.
+ */
+export function defaultFor(f: Field): unknown {
+  if (!f.required) return undefined;
+  if (f.control === 'select') return f.options?.[0];
+  if (f.control === 'number') {
+    // 5 giay la do dai hop ly nhat cho phan lon model video
+    if (f.name === 'duration') return Math.min(5, f.max ?? 5);
+    return f.min ?? undefined;
+  }
+  return undefined;
+}
+
+/** Gia tri thuc su se duoc gui di cho mot truong. */
+export function effectiveValue(f: Field, values: FormValues): unknown {
+  const v = values[f.name];
+  return v == null || v === '' ? defaultFor(f) : v;
+}
+
+/**
  * Gan asset dang dinh kem vao dung field cua variant, roi tron voi gia tri form.
  * Field asset don lay cai dau tien cung loai; field danh sach lay tat ca.
  */
@@ -297,7 +321,7 @@ export function buildPayload(
     }
 
     // --- Field thuong ---
-    const v = values[f.name];
+    const v = effectiveValue(f, values);
     if (v == null || v === '') continue;
     payload[f.name] = v;
   }

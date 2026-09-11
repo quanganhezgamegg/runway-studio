@@ -9,7 +9,7 @@ import { useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, kindOfFile } from '@/api/client';
 import type { Field as FieldDef } from '@/lib/catalog';
-import { blockedTargets, buildPayload, missingRequired } from '@/lib/catalog';
+import { blockedTargets, buildPayload, effectiveValue, missingRequired } from '@/lib/catalog';
 import { attachedKinds, selectActive, selectTargets, useStore } from '@/store';
 import { Button, Chip, Field, Input, Select, fmt, ratioLabel, titleCase, toast } from './ui';
 
@@ -169,13 +169,23 @@ export function Composer() {
             e.target.value = '';
           }}
         />
-
-        {[...hints].map(([kind, n]) => (
-          <span key={kind} className="font-mono text-[10px] text-ink-faint">
-            + đính {KIND_LABEL[kind]} → mở khoá {n} model
-          </span>
-        ))}
       </div>
+
+      {/* Goi y mo khoa them model - de rieng mot dong cho de doc */}
+      {hints.size > 0 && (
+        <div className="mb-2.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-faint">
+          {[...hints].map(([kind, n]) => (
+            <button
+              key={kind}
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="transition-colors hover:text-accent"
+            >
+              Đính {KIND_LABEL[kind]} để mở khoá <b className="font-medium text-ink-muted">{n}</b> model khác
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Prompt + nut tao */}
       <div className="flex items-stretch gap-2">
@@ -194,10 +204,17 @@ export function Composer() {
               generate.mutate();
             }
           }}
-          placeholder="Mô tả điều bạn muốn tạo…   (Ctrl+Enter để tạo)"
+          placeholder="Mô tả điều bạn muốn tạo…"
+          title="Ctrl+Enter để tạo"
           className="min-h-[44px] flex-1 resize-none rounded-lg border border-line bg-surface-2 px-3 py-2.5 text-[13.5px] leading-relaxed text-ink outline-none transition-colors focus:border-accent"
         />
-        <Button type="submit" variant="primary" disabled={busy || !active} className="px-6">
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={busy || !active}
+          className="shrink-0 px-6"
+          title="Ctrl+Enter"
+        >
           {generate.isPending ? 'Đang gửi…' : 'Tạo'}
         </Button>
       </div>
@@ -257,7 +274,8 @@ export function Composer() {
 // ---------------------------------------------------------------------------
 /** Chip hien gia tri hien tai, bam ra popover chua dieu khien. */
 function ChipControl({ field }: { field: FieldDef }) {
-  const value = useStore((s) => s.values[field.name]);
+  const values = useStore((s) => s.values);
+  const value = effectiveValue(field, values);
   const shown =
     value == null || value === ''
       ? field.name === 'seed'

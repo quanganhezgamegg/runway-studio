@@ -273,7 +273,14 @@ const NOT_GENERATION = new Set([
 /** Phan loai endpoint de nhom trong sidebar. */
 function classify(path) {
   if (path.startsWith('/v1/recipes/')) return 'recipe';
-  if (/character_performance|avatar_videos/.test(path)) return 'video';
+
+  // avatar_videos can mot avatar ID tao qua POST /v1/avatars, ma endpoint do
+  // chua co giao dien. De no o nhom video thi no thanh model mac dinh cua
+  // "Video + khong dinh kem" - nguoi dung bam Tao va luon that bai.
+  // Xep vao Cong cu: van thay duoc, nhung khong chan duong gen4.5.
+  if (/avatar_videos/.test(path)) return 'other';
+
+  if (/character_performance/.test(path)) return 'video';
   if (/video/i.test(path) && !/upscale|hdr/i.test(path)) return 'video';
   if (/image/i.test(path) && !/upscale/i.test(path)) return 'image';
   if (/speech|sound|voice|audio/i.test(path)) return 'audio';
