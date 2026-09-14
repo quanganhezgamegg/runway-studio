@@ -73,6 +73,25 @@ function megapixels(ratio: string): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// Recipe: gia co dinh cho N giay dau, roi cong them moi giay
+// ---------------------------------------------------------------------------
+const RECIPE: Record<string, { base: Tier; perExtra: Tier; baseSeconds: number; minSec: number; maxSec: number }> = {
+  product_ad: {
+    base: { '720p': 200, '1080p': 216, '*': 200 },
+    perExtra: { '720p': 36, '1080p': 40, '*': 36 },
+    baseSeconds: 4, minSec: 4, maxSec: 15,
+  },
+  product_ugc: {
+    base: { '720p': 192, '1080p': 208, '*': 192 },
+    perExtra: { '720p': 36, '1080p': 40, '*': 36 },
+    baseSeconds: 4, minSec: 4, maxSec: 15,
+  },
+};
+
+/** multi_shot_video tinh thang theo giay, khong co gia co dinh. */
+const MULTI_SHOT: Tier = { '720p': 13, '1080p': 17, '*': 13 };
+
+// ---------------------------------------------------------------------------
 // Phu phi dinh dang chuyen nghiep
 // ---------------------------------------------------------------------------
 const PRO_FORMAT_SURCHARGE: Record<string, number> = {
@@ -123,6 +142,44 @@ export function estimateCost(
   const model = variant.model;
   const breakdown: string[] = [];
   const refImages = attachments.filter((a) => a.kind === 'image').length;
+
+  // ----- RECIPE -----
+  // Recipe khong co truong `model` nen nhan dien bang chinh cac truong dac
+  // trung cua no. Gia recipe khac han model thuong: co gia co dinh cho vai
+  // giay dau roi moi cong theo giay.
+  const isUgc = variant.fields.some((f) => f.name === 'characterImage');
+  const isAd = variant.fields.some((f) => f.name === 'productImages');
+  const isMultiShot = variant.fields.some((f) => f.name === 'firstFrame');
+
+  if (isUgc || isAd || isMultiShot) {
+    const resKey = resolutionKey(variant, values);
+    const dField = variant.fields.find((f) => f.name === 'duration');
+    let seconds = numVal(variant, values, 'duration');
+    let guessed = false;
+    if (seconds == null) {
+      seconds = dField?.min ?? (isMultiShot ? 5 : 4);
+      guessed = true;
+    }
+
+    if (isMultiShot) {
+      const rate = MULTI_SHOT[resKey] ?? MULTI_SHOT['*']!;
+      const total = rate * seconds;
+      breakdown.push(`${rate} cr/giây × ${seconds} giây${guessed ? ' (giả định)' : ''} = ${total}`);
+      return { credits: total, breakdown, approximate: guessed, lowerBound: guessed };
+    }
+
+    const r = RECIPE[isUgc ? 'product_ugc' : 'product_ad']!;
+    const base = r.base[resKey] ?? r.base['*']!;
+    const extra = Math.max(0, seconds - r.baseSeconds);
+    const perExtra = r.perExtra[resKey] ?? r.perExtra['*']!;
+    const total = base + extra * perExtra;
+
+    breakdown.push(`${base} cr cho ${r.baseSeconds} giây đầu`);
+    if (extra) breakdown.push(`+ ${extra} giây × ${perExtra} = ${extra * perExtra}`);
+    if (guessed) breakdown.push(`(giả định ${seconds} giây — mức tối thiểu)`);
+
+    return { credits: total, breakdown, approximate: guessed, lowerBound: guessed };
+  }
 
   // ----- VIDEO -----
   const video = VIDEO[model];
