@@ -39,6 +39,16 @@ export function explainFailure(failureCode?: string | null, raw?: string | null)
 
   // --- Loi luc GUI yeu cau, khong phai loi task ---
   if (code.startsWith('REQUEST.')) {
+    if (code === 'REQUEST.INSUFFICIENT_CREDITS') {
+      return {
+        message: 'Không đủ credit cho lần tạo này.',
+        billed: 'refunded',
+        retryable: false,
+        action:
+          'Giảm thời lượng, hạ độ phân giải, hoặc đổi sang model rẻ hơn. ' +
+          'Con số ước tính nằm ngay trên nút Tạo — so với số dư trước khi bấm.',
+      };
+    }
     if (code === 'REQUEST.VALIDATION') {
       return {
         message: 'Tham số không hợp lệ với model này.',
@@ -156,3 +166,59 @@ const BILLED_LABEL: Record<FriendlyError['billed'], string> = {
 };
 
 export const billedLabel = (b: FriendlyError['billed']) => BILLED_LABEL[b];
+
+
+// ---------------------------------------------------------------------------
+/**
+ * Runway tra loi validation dang:
+ *   { error, issues: [{ code, path: ["duration"], message, expected }] }
+ *
+ * Doc ra thanh dong ngan gon theo tung truong. Khong co buoc nay thi nguoi
+ * dung chi thay mot cuc JSON va khong biet phai sua o dau.
+ */
+export interface ValidationIssue {
+  field: string;
+  message: string;
+}
+
+const CODE_VI: Record<string, string> = {
+  invalid_type: 'sai kiểu dữ liệu',
+  invalid_value: 'giá trị không nằm trong danh sách cho phép',
+  invalid_union: 'không khớp biến thể nào của model này',
+  too_small: 'nhỏ hơn mức cho phép',
+  too_big: 'lớn hơn mức cho phép',
+  invalid_format: 'sai định dạng',
+  unrecognized_keys: 'model này không nhận tham số đó',
+};
+
+export function parseValidationIssues(details: unknown): ValidationIssue[] {
+  if (!details || typeof details !== 'object') return [];
+  const raw = (details as { issues?: unknown }).issues;
+  if (!Array.isArray(raw)) return [];
+
+  return raw.slice(0, 12).map((i) => {
+    const o = (i ?? {}) as {
+      path?: unknown[];
+      code?: string;
+      message?: string;
+      expected?: unknown;
+      values?: unknown[];
+      keys?: unknown[];
+    };
+    const field = Array.isArray(o.path) && o.path.length ? o.path.join('.') : '(toàn bộ yêu cầu)';
+
+    const parts: string[] = [];
+    if (o.code && CODE_VI[o.code]) parts.push(CODE_VI[o.code]!);
+
+    if (Array.isArray(o.values) && o.values.length) {
+      parts.push(`chỉ nhận: ${o.values.slice(0, 8).join(', ')}`);
+    } else if (Array.isArray(o.keys) && o.keys.length) {
+      parts.push(`thừa: ${o.keys.join(', ')}`);
+    } else if (o.expected) {
+      parts.push(`cần ${String(o.expected)}`);
+    }
+
+    if (!parts.length && o.message) parts.push(o.message);
+    return { field, message: parts.join(' — ') || 'không hợp lệ' };
+  });
+}

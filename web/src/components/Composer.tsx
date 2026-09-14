@@ -6,7 +6,7 @@
  * hieu vi sao danh sach model thay doi khi ho dinh them file.
  */
 import { useMemo, useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { Field as FieldDef } from '@/lib/catalog';
 import {
@@ -28,6 +28,7 @@ import { AttachmentTag, TagAutocomplete } from './AttachmentTag';
 import { audioNotes, checkConstraints } from '@/lib/constraints';
 import { checkFile, cropPreview, probeFile } from '@/lib/media';
 import { REJECTION_TIPS } from '@/lib/errors';
+import { estimateCost } from '@/lib/pricing';
 import { attachedKinds, selectActive, selectTargets, useStore } from '@/store';
 import { Button, Chip, Field, Input, Select, fmt, ratioLabel, titleCase, toast } from './ui';
 
@@ -285,6 +286,7 @@ export function Composer() {
   const notes = useMemo(() => audioNotes(variant, store.values), [variant, store.values]);
   const blocked = violations.some((v) => v.level === 'block');
 
+
   // Model nay co nhan khung hinh cuoi khong
   const frameField = (variant?.fields ?? []).find((f) => f.control === 'asset' && f.supportsLastFrame);
   const hasFirstFrame = store.attachments.some((a) => roles.get(a.uri) === frameField?.name);
@@ -298,6 +300,27 @@ export function Composer() {
     .filter((a) => a.kind === 'image' && a.width && a.height)
     .map((a) => ({ asset: a, crop: cropPreview({ kind: 'image', width: a.width, height: a.height, sizeBytes: a.sizeBytes ?? 0, mime: a.mime ?? '' }, ratioValue) }))
     .filter((x) => x.crop);
+
+  // So du lay tu cache chung, khong tao them request
+  const { data: org } = useQuery({ queryKey: ['org'], queryFn: api.organization, staleTime: 60_000 });
+  const balance = org?.creditBalance ?? null;
+
+  // Uoc tinh chi phi TRUOC khi bam Tao, de khong ai bam nham mot lan 400 credit
+  const cost = useMemo(
+    () => estimateCost(variant, store.values, store.attachments, store.prompt),
+    [variant, store.values, store.attachments, store.prompt]
+  );
+
+  // Chan luon khi uoc tinh vuot so du: Runway se tu choi va day la loi hay
+  // gap nhat voi nhom model dat (seedance2_5 toi thieu 80 cr, seedance2
+  // 36 cr/giay). Bam roi moi biet la mat thoi gian cho.
+  // Chan khi con so da chac chan vuot: hoac tinh chinh xac, hoac la san duoi
+  // (gia dinh thoi luong toi thieu) - hai truong hop deu khong the re hon.
+  const notEnough =
+    cost.credits != null &&
+    balance != null &&
+    (!cost.approximate || cost.lowerBound === true) &&
+    cost.credits > balance;
 
   const busy = generate.isPending || store.uploading > 0;
 
@@ -600,11 +623,25 @@ export function Composer() {
         <Button
           type="submit"
           variant="primary"
-          disabled={busy || !active || blocked}
-          className="shrink-0 px-6"
-          title={blocked ? 'Còn ràng buộc chưa thoả' : 'Ctrl+Enter'}
+          disabled={busy || !active || blocked || notEnough}
+          className="shrink-0 flex-col gap-0 px-5 py-1.5 leading-tight"
+          title={
+            notEnough
+              ? `Cần ${cost.credits} credit, chỉ còn ${balance}`
+              : blocked
+              ? 'Còn ràng buộc chưa thoả'
+              : cost.breakdown.length
+                ? `Ước tính: ${cost.breakdown.join('\n')}`
+                : 'Ctrl+Enter'
+          }
         >
-          {generate.isPending ? 'Đang gửi…' : 'Tạo'}
+          <span>{generate.isPending ? 'Đang gửi…' : 'Tạo'}</span>
+          {cost.credits != null && !generate.isPending && (
+            <span className="font-mono text-[10px] font-normal opacity-75">
+              {cost.approximate ? '~' : ''}
+              {cost.credits} cr
+            </span>
+          )}
         </Button>
       </div>
 
@@ -661,6 +698,25 @@ export function Composer() {
           </Chip>
         )}
       </div>
+
+      {/* Cach tinh credit + canh bao so du */}
+      {(cost.credits != null || cost.note) && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px] text-ink-faint">
+          {cost.credits != null && (
+            <span>
+              Ước tính <b className="font-mono text-ink-muted">{cost.credits} credit</b>
+              {cost.breakdown.length > 0 && <span> — {cost.breakdown.join('; ')}</span>}
+            </span>
+          )}
+          {cost.note && <span className="text-warn">{cost.note}</span>}
+          {notEnough && (
+            <span className="text-err">
+              Không đủ credit — cần {cost.credits}, chỉ còn {balance}. Giảm thời lượng hoặc đổi
+              model rẻ hơn.
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Doi chieu loi goi anh: cho biet cai nao tro dung anh that */}
       {mentions.length > 0 && (

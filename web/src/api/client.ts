@@ -27,6 +27,8 @@ export interface Job {
   error: string | null;
   /** Ma loi ky thuat cua Runway - dich sang thong bao nguoi dung o lib/errors.ts */
   failureCode: string | null;
+  /** Cau truc loi nguyen ban cua Runway, de doc ra tung truong sai. */
+  errorDetails: unknown;
   /** File da duoc server tu luu. Dung cai nay thay link Runway da het han. */
   localOutput: string[] | null;
   estimatedCost: Cost;

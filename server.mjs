@@ -251,6 +251,7 @@ function jobView(j) {
     // Giu rieng ma loi: giao dien dich no thanh thong bao cho nguoi dung,
     // gop vao `error` thi mat thong tin de phan loai
     failureCode: j.failureCode ?? null,
+    errorDetails: j.errorDetails ?? null,
     // Duong dan cuc bo sau khi tu luu - dung cai nay thay link Runway da het han
     localOutput: j.localOutput ?? null,
     estimatedCost: j.estimatedCost ?? null, cost: j.cost ?? null,
@@ -284,7 +285,7 @@ function pushJobUpdate(j) {
     jobId: j.jobId, taskId: j.taskId, path: j.path, model: j.model, title: j.title,
     promptText: j.promptText, user: j.user, state: j.state, output: j.output ?? null,
     error: j.error ?? null, failureCode: j.failureCode ?? null,
-    localOutput: j.localOutput ?? null,
+    errorDetails: j.errorDetails ?? null, localOutput: j.localOutput ?? null,
     cost: j.cost ?? null, estimatedCost: j.estimatedCost ?? null,
     createdAt: j.createdAt, finishedAt: j.finishedAt ?? null, payload: j.payload,
   });
@@ -346,12 +347,20 @@ async function dispatch() {
         setTimeout(dispatch, 15000);
       } else {
         job.state = 'FAILED';
-        job.error = e.message + (e.details ? ` - ${JSON.stringify(e.details).slice(0, 300)}` : '');
+        job.error = e.message;
+        // Giu NGUYEN cau truc loi cua Runway. Truoc day stringify roi cat con
+        // 300 ky tu, nen danh sach `issues` bi mat va nguoi dung khong biet
+        // truong nao sai - dung thu ho can nhat khi gap loi validation.
+        job.errorDetails = e.details ?? null;
         // Gan ma rieng cho loi luc GUI yeu cau. Khong co ma thi giao dien
         // se doan sai thanh "loi he thong", trong khi day la tham so sai
         // ma nguoi dung sua duoc.
+        // Runway tra 400 cho ca loi tham so LAN loi het credit. Gop chung
+        // thanh "tham so khong hop le" la sai han huong xu ly.
+        const msg = String(e.message || '');
         job.failureCode =
-          e.status === 400 ? 'REQUEST.VALIDATION'
+          /enough credits/i.test(msg) ? 'REQUEST.INSUFFICIENT_CREDITS'
+          : e.status === 400 ? 'REQUEST.VALIDATION'
           : e.status === 401 || e.status === 403 ? 'REQUEST.AUTH'
           : e.status >= 500 ? 'REQUEST.SERVER'
           : 'REQUEST.OTHER';

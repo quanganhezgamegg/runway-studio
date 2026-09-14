@@ -5,7 +5,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { api, credits, kindOfUrl } from '@/api/client';
 import type { Job } from '@/api/client';
 import { useStore } from '@/store';
-import { billedLabel, explainFailure } from '@/lib/errors';
+import { billedLabel, explainFailure, parseValidationIssues } from '@/lib/errors';
 import { Button, Progress, StatePill, fmt, timeAgo, toast } from './ui';
 
 export function Gallery({ jobs, loading }: { jobs: Job[]; loading: boolean }) {
@@ -87,6 +87,7 @@ function Card({ job, onOpen }: { job: Job; onOpen: (url: string) => void }) {
 
   // Dich ma loi ky thuat thanh thong bao nguoi dung (muc K cua tai lieu)
   const failure = job.state === 'FAILED' ? explainFailure(job.failureCode, job.error) : null;
+  const issues = failure ? parseValidationIssues(job.errorDetails) : [];
 
   const retry = useMutation({
     mutationFn: () => {
@@ -194,7 +195,19 @@ function Card({ job, onOpen }: { job: Job; onOpen: (url: string) => void }) {
         {failure && (
           <div className="mt-2 rounded-md border border-err/40 bg-[#1d1314] px-2.5 py-2">
             <div className="text-[11.5px] leading-snug text-[#ffb4b4]">{failure.message}</div>
-            {failure.action && (
+            {issues.length > 0 && (
+              <ul className="mt-1.5 space-y-0.5">
+                {issues.map((it, i) => (
+                  <li key={i} className="text-[10.5px] leading-snug text-ink-muted">
+                    <code className="rounded bg-surface-2 px-1 font-mono text-[10px] text-ink">
+                      {it.field}
+                    </code>{' '}
+                    {it.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {failure.action && issues.length === 0 && (
               <div className="mt-1 text-[10.5px] leading-snug text-ink-muted">{failure.action}</div>
             )}
             {failure.tips && (
