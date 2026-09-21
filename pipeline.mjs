@@ -25,16 +25,105 @@ import {
   scenes,
   videos,
 } from './store.mjs';
+import {
+  concatVideo,
+  genAllClips,
+  genAllImages,
+  genAllRefs,
+  hasFfmpeg,
+  videoStatus,
+} from './batch.mjs';
 
 /**
  * @param {object} deps
  * @param {(job: object) => object} deps.enqueue  ham enqueue cua server
  */
-export function pipelineRouter({ enqueue }) {
-  const r = express.Router();
 
-  /** Nhan @tag suy tu ten, de frontend va payload dung cung mot gia tri. */
-  const withTag = (e) => ({ ...e, tag: entityTag(e.name) });
+/** Nhan @tag suy tu ten, dung chung cho frontend va payload. */
+const withTag = (e) => ({ ...e, tag: entityTag(e.name) });
+
+// ---------------------------------------------------------------------------
+// Dung payload cho ba buoc.
+//
+// Tach ra module-level de lenh don va lenh hang loat dung CUNG mot ham -
+// hai duong dung payload khac nhau la mam bug kho tim, vi ket qua chi lech
+// nhau khi chay hang loat.
+// ---------------------------------------------------------------------------
+
+/** Buoc 1: anh tham chieu cho mot entity. */
+export function buildRefPayload(e, project) {
+  const style = ENTITY_REF_STYLE[e.entity_type] ?? ENTITY_REF_STYLE.other;
+  const promptText = [e.description.trim(), style.extra, project?.material?.trim()]
+    .filter(Boolean)
+    .join('. ');
+
+  return {
+    path: '/v1/text_to_image',
+    payload: { model: REF_IMAGE_MODEL, promptText, ratio: style.ratio },
+    title: `Ref: ${e.name}`,
+  };
+}
+
+/** Buoc 2: anh khung dau cho mot canh, kem anh tham chieu cua entity trong canh. */
+export function buildImagePayload(s, video, project) {
+  const refs = s.entity_ids
+    .map((id) => entities.get(id))
+    .filter((e) => e?.ref_uri)
+    .map((e) => ({ uri: e.ref_uri, tag: entityTag(e.name) }));
+
+  // gen4_image_turbo BAT BUOC co referenceImages. Khong co ref nao thi phai
+  // lui ve gen4_image, dat hon nhung khong bi tu choi.
+  const model = refs.length ? SCENE_IMAGE_MODEL : REF_IMAGE_MODEL;
+  const promptText = [s.image_prompt.trim(), project?.material?.trim()]
+    .filter(Boolean)
+    .join('. ');
+
+  const payload = { model, promptText, ratio: video?.ratio || '1280:720' };
+  if (refs.length) payload.referenceImages = refs;
+
+  return {
+    path: '/v1/text_to_image',
+    payload,
+    title: `Canh ${s.display_order + 1}: anh`,
+    usedRefs: refs.map((r) => r.tag),
+  };
+}
+
+/** Buoc 3: clip tu anh khung dau. */
+export function buildVideoPayload(s, video) {
+  // Giong nhan vat: noi voice_description vao prompt de model giu giong
+  // nhat quan giua cac canh (y tuong tu Flow Kit)
+  const voices = s.entity_ids
+    .map((id) => entities.get(id))
+    .filter((e) => e?.voice_description?.trim())
+    .map((e) => `${e.name}: ${e.voice_description.trim()}`);
+
+  const prompt = (s.video_prompt || s.image_prompt || '').trim();
+
+  // Noi bang dau cham, khong phai dau cach - de model khong doc lien thanh
+  // mot cau vo nghia khi ghep mo ta chuyen dong + giong + chu thich nhac
+  const promptText = [
+    prompt.replace(/\.?$/, ''),
+    ...voices,
+    // Mac dinh chan nhac nen tu phat sinh - de ghep nhac rieng o hau ky
+    'No background music. Keep only natural sound effects and ambient sounds',
+  ].join('. ') + '.';
+
+  return {
+    path: '/v1/image_to_video',
+    payload: {
+      model: video?.model || 'gen4_turbo',
+      promptImage: s.image_uri,
+      promptText,
+      ratio: video?.ratio || '1280:720',
+      duration: s.duration || 8,
+    },
+    title: `Canh ${s.display_order + 1}: clip`,
+  };
+}
+
+export function pipelineRouter({ enqueue, outDir }) {
+  const r = express.Router();
 
   const wrap = (fn) => (req, res) =>
     fn(req, res).catch((e) =>
@@ -136,19 +225,9 @@ export function pipelineRouter({ enqueue }) {
     if (!e) return missing(res, 'entity');
     if (!e.description?.trim()) return bad(res, 'Entity chua co mo ta ngoai hinh');
 
-    const style = ENTITY_REF_STYLE[e.entity_type] ?? ENTITY_REF_STYLE.other;
-    const material = String(req.body?.material || '').trim();
-
-    const promptText = [e.description.trim(), style.extra, material]
-      .filter(Boolean)
-      .join('. ');
-
-    const job = enqueue({
-      path: '/v1/text_to_image',
-      payload: { model: REF_IMAGE_MODEL, promptText, ratio: style.ratio },
-      title: `Ref: ${e.name}`,
-      user: req.user.name,
-    });
+    // material lay tu project dang mo, hoac tu body neu goi truc tiep
+    const project = req.body?.material ? { material: req.body.material } : null;
+    const job = enqueue({ ...buildRefPayload(e, project), user: req.user.name });
 
     entities.update(e.id, { ref_job_id: job.jobId });
     res.json({ job, entity: withTag(entities.get(e.id)) });
@@ -217,79 +296,88 @@ export function pipelineRouter({ enqueue }) {
    * lai ngoai hinh - do chinh la thu giu nhan vat nhat quan giua cac canh.
    */
   r.post('/scenes/:id/image', wrap(async (req, res) => {
-    const s = scenes.get(req.params.id);
-    if (!s) return missing(res, 'scene');
-    if (!s.image_prompt?.trim()) return bad(res, 'Canh chua co mo ta hanh dong');
+    const s2 = scenes.get(req.params.id);
+    if (!s2) return missing(res, 'scene');
+    if (!s2.image_prompt?.trim()) return bad(res, 'Canh chua co mo ta hanh dong');
 
-    const v = videos.get(s.video_id);
+    const v = videos.get(s2.video_id);
     const p = v ? projects.get(v.project_id) : null;
+    const { usedRefs, ...spec } = buildImagePayload(s2, v, p);
 
-    const refs = s.entity_ids
-      .map((id) => entities.get(id))
-      .filter((e) => e?.ref_uri)
-      .map((e) => ({ uri: e.ref_uri, tag: entityTag(e.name) }));
-
-    // gen4_image_turbo BAT BUOC co referenceImages. Khong co ref nao thi
-    // phai lui ve gen4_image, dat hon nhung khong bi tu choi.
-    const model = refs.length ? SCENE_IMAGE_MODEL : REF_IMAGE_MODEL;
-
-    const promptText = [s.image_prompt.trim(), p?.material?.trim()].filter(Boolean).join('. ');
-
-    const payload = { model, promptText, ratio: v?.ratio || '1280:720' };
-    if (refs.length) payload.referenceImages = refs;
-
-    const job = enqueue({
-      path: '/v1/text_to_image',
-      payload,
-      title: `Canh ${s.display_order + 1}: anh`,
-      user: req.user.name,
-    });
-
-    scenes.update(s.id, { image_job_id: job.jobId });
-    res.json({ job, scene: scenes.get(s.id), usedRefs: refs.map((x) => x.tag) });
+    const job = enqueue({ ...spec, user: req.user.name });
+    scenes.update(s2.id, { image_job_id: job.jobId });
+    res.json({ job, scene: scenes.get(s2.id), usedRefs });
   }));
 
   /** Buoc 3: sinh clip tu anh khung dau cua canh. */
   r.post('/scenes/:id/video', wrap(async (req, res) => {
-    const s = scenes.get(req.params.id);
-    if (!s) return missing(res, 'scene');
-    if (!s.image_uri) return bad(res, 'Canh chua co anh khung dau — sinh anh truoc');
+    const s2 = scenes.get(req.params.id);
+    if (!s2) return missing(res, 'scene');
+    if (!s2.image_uri) return bad(res, 'Canh chua co anh khung dau — sinh anh truoc');
 
-    const v = videos.get(s.video_id);
-    const prompt = (s.video_prompt || s.image_prompt || '').trim();
+    const v = videos.get(s2.video_id);
+    const prompt = (s2.video_prompt || s2.image_prompt || '').trim();
     if (!prompt) return bad(res, 'Canh chua co mo ta chuyen dong');
 
-    // Giong nhan vat: noi voice_description cua entity trong canh vao prompt,
-    // giup model giu giong nhat quan (y tuong tu Flow Kit)
-    const voices = s.entity_ids
-      .map((id) => entities.get(id))
-      .filter((e) => e?.voice_description?.trim())
-      .map((e) => `${e.name}: ${e.voice_description.trim()}`);
+    const job = enqueue({ ...buildVideoPayload(s2, v), user: req.user.name });
+    scenes.update(s2.id, { video_job_id: job.jobId });
+    res.json({ job, scene: scenes.get(s2.id) });
+  }));
 
-    // Noi bang dau cham, khong phai dau cach - de model khong doc lien thanh
-    // mot cau vo nghia khi ghep mo ta chuyen dong + giong + chu thich nhac
-    const promptText = [
-      prompt.replace(/\.?$/, ''),
-      ...voices,
-      // Mac dinh chan nhac nen tu phat sinh - de ghep nhac rieng o hau ky
-      'No background music. Keep only natural sound effects and ambient sounds',
-    ].join('. ') + '.';
+  // -------------------------------------------------------------------------
+  // Lenh hang loat — tuong duong cac skill cua Flow Kit
+  // -------------------------------------------------------------------------
 
-    const job = enqueue({
-      path: '/v1/image_to_video',
-      payload: {
-        model: v?.model || 'gen4_turbo',
-        promptImage: s.image_uri,
-        promptText,
-        ratio: v?.ratio || '1280:720',
-        duration: s.duration || 8,
-      },
-      title: `Canh ${s.display_order + 1}: clip`,
-      user: req.user.name,
-    });
+  /** Trang thai pipeline: xong gi, con gi, buoc tiep la gi. */
+  r.get('/videos/:id/status', wrap(async (req, res) => {
+    const st = videoStatus(req.params.id);
+    if (!st) return missing(res, 'video');
+    res.json({ ...st, ffmpeg: await hasFfmpeg() });
+  }));
 
-    scenes.update(s.id, { video_job_id: job.jobId });
-    res.json({ job, scene: scenes.get(s.id) });
+  /** Sinh anh tham chieu cho MOI entity chua co. */
+  r.post('/projects/:id/gen-refs', wrap(async (req, res) => {
+    res.json(
+      genAllRefs(req.params.id, {
+        enqueue,
+        user: req.user.name,
+        buildRefPayload,
+      })
+    );
+  }));
+
+  /**
+   * Sinh anh khung dau cho MOI canh chua co.
+   * Chan lai neu entity duoc dung trong canh chua co anh tham chieu.
+   */
+  r.post('/videos/:id/gen-images', wrap(async (req, res) => {
+    res.json(
+      genAllImages(req.params.id, {
+        enqueue,
+        user: req.user.name,
+        force: req.body?.force === true,
+        buildImagePayload: (sc, v, p) => {
+          const { usedRefs, ...spec } = buildImagePayload(sc, v, p);
+          return spec;
+        },
+      })
+    );
+  }));
+
+  /** Sinh clip cho MOI canh da co anh khung dau. */
+  r.post('/videos/:id/gen-clips', wrap(async (req, res) => {
+    res.json(
+      genAllClips(req.params.id, {
+        enqueue,
+        user: req.user.name,
+        buildVideoPayload,
+      })
+    );
+  }));
+
+  /** Ghep cac clip thanh mot video bang ffmpeg. */
+  r.post('/videos/:id/concat', wrap(async (req, res) => {
+    res.json(await concatVideo(req.params.id, { outDir }));
   }));
 
   return r;

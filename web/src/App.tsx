@@ -6,6 +6,7 @@ import type { Job, Me } from '@/api/client';
 import type { OutputKind } from '@/lib/catalog';
 import { selectActive, selectTools, useStore } from '@/store';
 import { Composer } from './components/Composer';
+import { Pipeline } from './components/Pipeline';
 import { Gallery } from './components/Gallery';
 import { Button, Field, Input, Select, Toaster, fmt, toast } from './components/ui';
 
@@ -65,6 +66,8 @@ function Studio({ me }: { me: Me }) {
   const qc = useQueryClient();
   const store = useStore();
   const [tab, setTab] = useState<'session' | 'history'>('session');
+  /** 'single' = tao tung clip roi; 'pipeline' = du an nhieu canh. */
+  const [mode, setMode] = useState<'single' | 'pipeline'>('single');
   const [showUsers, setShowUsers] = useState(false);
 
   const { data: catalog } = useQuery({ queryKey: ['catalog'], queryFn: api.catalog, staleTime: Infinity });
@@ -102,8 +105,11 @@ function Studio({ me }: { me: Me }) {
   const active = selectActive(store);
   const tools = useMemo(() => selectTools(catalog ?? null), [catalog]);
 
-  const limits = active ? org?.tier.models[active.variant.model] : undefined;
-  const used = active ? (org?.usage.models[active.variant.model]?.dailyGenerations ?? 0) : 0;
+  // Optional chaining ca `tier`/`usage`: khi /api/organization loi (key sai,
+  // Runway down) thi response la {error} khong co hai truong nay, va thieu `?`
+  // o day se lam SUP CA GIAO DIEN chu khong chi mat phan han muc.
+  const limits = active ? org?.tier?.models?.[active.variant.model] : undefined;
+  const used = active ? (org?.usage?.models?.[active.variant.model]?.dailyGenerations ?? 0) : 0;
   const activeJobs = jobs.filter((j) => ['QUEUED', 'SUBMITTED', 'RUNNING'].includes(j.state));
   const shown = tab === 'session' ? jobs : history;
 
@@ -117,8 +123,16 @@ function Studio({ me }: { me: Me }) {
         </div>
 
         <div className="px-2">
-          <GroupLabel>Muốn tạo ra gì</GroupLabel>
-          {OUTPUTS.map((o) => (
+          <GroupLabel>Chế độ</GroupLabel>
+          <NavRow active={mode === 'single'} onClick={() => setMode('single')}>
+            Tạo từng clip
+          </NavRow>
+          <NavRow active={mode === 'pipeline'} onClick={() => setMode('pipeline')}>
+            Dự án nhiều cảnh
+          </NavRow>
+
+          {mode === 'single' && <GroupLabel>Muốn tạo ra gì</GroupLabel>}
+          {mode === 'single' && OUTPUTS.map((o) => (
             <NavRow
               key={o.key}
               active={!store.toolPath && store.outputKind === o.key}
@@ -128,8 +142,8 @@ function Studio({ me }: { me: Me }) {
             </NavRow>
           ))}
 
-          <GroupLabel>Công cụ</GroupLabel>
-          {tools.map((ep) => (
+          {mode === 'single' && <GroupLabel>Công cụ</GroupLabel>}
+          {mode === 'single' && tools.map((ep) => (
             <NavRow key={ep.path} active={store.toolPath === ep.path} onClick={() => store.setTool(ep.path)}>
               {ep.title}
             </NavRow>
@@ -166,9 +180,13 @@ function Studio({ me }: { me: Me }) {
         <header className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
           <div className="min-w-0 flex-1">
             <h2 className="truncate font-display text-[15px] font-semibold tracking-tight">
-              {store.toolPath ? active?.endpoint.title : OUTPUTS.find((o) => o.key === store.outputKind)?.label}
+              {mode === 'pipeline'
+                ? 'Dự án nhiều cảnh'
+                : store.toolPath
+                  ? active?.endpoint.title
+                  : OUTPUTS.find((o) => o.key === store.outputKind)?.label}
             </h2>
-            {limits && (
+            {mode === 'single' && limits && (
               <div className="mt-0.5 flex flex-wrap gap-x-3 font-mono text-[10.5px] text-ink-faint">
                 <span>đồng thời tối đa {limits.maxConcurrentGenerations}</span>
                 <span className={used >= limits.maxDailyGenerations ? 'text-err' : used > limits.maxDailyGenerations - 6 ? 'text-warn' : ''}>
@@ -189,7 +207,7 @@ function Studio({ me }: { me: Me }) {
             </div>
           )}
 
-          <div className="flex rounded-lg border border-line p-0.5">
+          <div className={`flex rounded-lg border border-line p-0.5 ${mode === 'pipeline' ? 'hidden' : ''}`}>
             {(['session', 'history'] as const).map((t) => (
               <button
                 key={t}
@@ -204,8 +222,14 @@ function Studio({ me }: { me: Me }) {
           </div>
         </header>
 
-        <Gallery jobs={shown} loading={jobsLoading && tab === 'session'} />
-        <Composer />
+        {mode === 'pipeline' ? (
+          <Pipeline />
+        ) : (
+          <>
+            <Gallery jobs={shown} loading={jobsLoading && tab === 'session'} />
+            <Composer />
+          </>
+        )}
       </section>
 
       {showUsers && <UsersDialog onClose={() => setShowUsers(false)} />}

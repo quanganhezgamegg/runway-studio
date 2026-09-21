@@ -697,7 +697,7 @@ app.post('/api/save', wrap(async (req, res) => {
 }));
 
 // --- Pipeline nhieu canh: project / entity / video / scene ---
-app.use('/api/pipeline', pipelineRouter({ enqueue }));
+app.use('/api/pipeline', pipelineRouter({ enqueue, outDir: OUT_DIR }));
 
 // --- Quan tri nguoi dung ---
 app.get('/api/users', requireAdmin, wrap(async (_req, res) => {
