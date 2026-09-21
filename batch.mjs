@@ -121,7 +121,7 @@ export function genAllRefs(projectId, { enqueue, user, buildRefPayload }) {
  * Chan neu con entity chua co anh tham chieu — day la kiem tra phu thuoc
  * quan trong nhat, khong co no thi nhan vat se khac nhau giua cac canh.
  */
-export function genAllImages(videoId, { enqueue, user, buildImagePayload, force = false }) {
+export async function genAllImages(videoId, { enqueue, user, buildImagePayload, refresh, force = false }) {
   const v = videos.get(videoId);
   if (!v) throw Object.assign(new Error('Khong tim thay video'), { status: 404 });
 
@@ -150,6 +150,8 @@ export function genAllImages(videoId, { enqueue, user, buildImagePayload, force 
   const jobs = [];
 
   for (const s of todo) {
+    // Day lai anh tham chieu len truoc khi dung — URI cua Runway co han
+    if (refresh) await refresh(s);
     const job = enqueue({ ...buildImagePayload(s, v, p), user });
     scenes.update(s.id, { image_job_id: job.jobId });
     jobs.push({ scene: s.display_order + 1, jobId: job.jobId });
@@ -168,7 +170,7 @@ export function genAllImages(videoId, { enqueue, user, buildImagePayload, force 
 }
 
 /** Buoc 3: clip cho moi canh da co anh khung dau. */
-export function genAllClips(videoId, { enqueue, user, buildVideoPayload }) {
+export async function genAllClips(videoId, { enqueue, user, buildVideoPayload, refresh }) {
   const v = videos.get(videoId);
   if (!v) throw Object.assign(new Error('Khong tim thay video'), { status: 404 });
 
@@ -182,7 +184,9 @@ export function genAllClips(videoId, { enqueue, user, buildVideoPayload }) {
 
   const jobs = [];
   for (const s of todo) {
-    const job = enqueue({ ...buildVideoPayload(s, v, p), user });
+    // refresh tra ve canh da cap nhat image_uri, phai dung ban do de dung payload
+    const cur = refresh ? await refresh(s) : s;
+    const job = enqueue({ ...buildVideoPayload(cur, v, p), user });
     scenes.update(s.id, { video_job_id: job.jobId });
     jobs.push({ scene: s.display_order + 1, jobId: job.jobId });
   }

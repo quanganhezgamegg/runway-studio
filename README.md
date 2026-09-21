@@ -190,17 +190,70 @@ cd web && npm run check:routing
 
 ```
 server.mjs                  backend: auth, hàng đợi, proxy, poll task
+store.mjs                   SQLite: project / entity / video / scene
+pipeline.mjs                route pipeline + dựng payload 3 bước
+batch.mjs                   lệnh hàng loạt + ghép ffmpeg
+pricing.mjs                 ước tính credit (dùng chung CLI và giao diện)
+scripts/rw.mjs              CLI điều khiển pipeline từ terminal
 scripts/build-catalog.mjs   OpenAPI spec -> catalog.json
 spec/runway-openapi.json    spec gốc từ docs.dev.runwayml.com
+.claude/skills/rw-story/    skill cho Claude Code: ý tưởng -> nhiều cảnh
 web/                        frontend React + TypeScript + Vite
   src/lib/catalog.ts        suy ra endpoint từ input
   src/store.ts              zustand
-  src/components/           Composer, Gallery, ui
+  src/components/           Composer, Pipeline, Gallery, ui
 public/catalog.json         sinh tự động, đừng sửa tay
 public/dist/                frontend đã build
-data/                       users.json, history.json, secret.key  (gitignored)
-outputs/                    file đã lưu về máy chủ                (gitignored)
+data/                       users.json, history.json, studio.db   (gitignored)
+outputs/                    file đã lưu + ảnh upload              (gitignored)
+.rw.json / .rw-session      cấu hình + phiên của CLI              (gitignored)
 ```
+
+## Làm video nhiều cảnh
+
+Một clip Runway dài tối đa 10 giây, nên truyện dài hơn phải chia cảnh rồi ghép.
+Pipeline bốn bước, mỗi bước ăn kết quả bước trước:
+
+```
+ảnh tham chiếu  →  ảnh khung đầu  →  clip  →  ghép (ffmpeg)
+  mỗi thực thể      mỗi cảnh          mỗi cảnh    một video
+```
+
+Ảnh tham chiếu là thứ giữ nhân vật **giống nhau giữa các cảnh**. Bước sinh ảnh
+khung đầu sẽ **từ chối** nếu còn thực thể chưa có ảnh tham chiếu, vì làm ngược
+thứ tự thì ra nhân vật khác mà vẫn bị tính tiền.
+
+Dùng trên giao diện ở tab **Pipeline**, hoặc từ terminal:
+
+```bash
+node scripts/rw.mjs help              # danh sách lệnh
+node scripts/rw.mjs plan story.json   # tạo cả project từ 1 file kịch bản
+node scripts/rw.mjs cost <videoId>    # còn tốn bao nhiêu credit
+node scripts/rw.mjs status <videoId>  # đang ở bước nào
+```
+
+Cấu hình CLI bằng `RW_BASE` / `RW_CODE`, hoặc file `.rw.json`
+(`{"base":"...","code":"..."}` — đã gitignore vì chứa mã truy cập).
+
+Trong Claude Code, gõ `/rw-story` rồi kể ý tưởng: skill sẽ viết prompt cho từng
+cảnh, tạo project, và báo chi phí trước khi chạy. Luật viết prompt nằm ở
+`.claude/skills/rw-story/SKILL.md`.
+
+### Dùng ảnh có sẵn
+
+Model không vẽ lại được người thật, logo thật hay sản phẩm thật — phải đưa ảnh
+vào. Nút **Tải ảnh** trên thẻ thực thể, nút **tải** trên hàng cảnh, hoặc:
+
+```bash
+node scripts/rw.mjs upload-ref   <entityId> anh/nguoi-that.jpg
+node scripts/rw.mjs upload-frame <sceneId>  anh/khung-mo-dau.png
+```
+
+Upload **không tốn credit**. Bản gốc được lưu vào `outputs/uploads/` và tự đẩy
+lại lên Runway trước mỗi lần sinh, vì mọi URI của Runway đều có hạn.
+
+Runway chỉ nhận **3 ảnh tham chiếu** mỗi ảnh sinh ra. Cảnh nào cần hơn thì tách
+cảnh; nếu vượt, server giữ những `@tag` có nhắc trong prompt và báo tên bị bỏ.
 
 ## Cập nhật khi Runway ra model mới
 

@@ -16,6 +16,10 @@ outputs/
 .env.*
 !.env.example
 
+# Cau hinh + phien cua CLI (scripts/rw.mjs) - CHUA MA TRUY CAP
+.rw.json
+.rw-session
+
 # Linh tinh
 *.log
 npm-debug.log*

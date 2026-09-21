@@ -586,43 +586,69 @@ app.get('/api/stream', (req, res) => {
   req.on('close', () => { clearInterval(ping); CLIENTS.delete(res); });
 });
 
+/**
+ * Chuan hoa ten file theo dung rang buoc cua Runway.
+ *
+ * Runway suy loai media tu DUOI FILE, khong tu content-type. File khong co
+ * duoi (vd: anh dan tu clipboard ten "blob") se bi tu choi, nen tu bu duoi vao.
+ * Spec con rang buoc minLength 3 / maxLength 255.
+ */
+function normalizeFilename(name, contentType) {
+  let filename = name || 'upload';
+  if (!/\.[a-z0-9]{2,5}$/i.test(filename)) {
+    filename = `${filename}${extFromMime(contentType)}`;
+  }
+  if (filename.length < 3) filename = `file-${filename}`;
+  if (filename.length > 255) {
+    const ext = extname(filename);
+    filename = filename.slice(0, 255 - ext.length) + ext;
+  }
+  return filename;
+}
+
+/**
+ * Day mot file len Runway, tra ve runway:// URI.
+ *
+ * Tach ra ham rieng vi tang pipeline cung can upload (anh nhan vat thay
+ * cho anh tu sinh, va upload LAI tu ban goc khi URI cu het han).
+ */
+async function uploadAsset({ bytes, filename, contentType = 'application/octet-stream' }) {
+  if (!bytes?.length) throw Object.assign(new Error('File rong'), { status: 400 });
+  const name = normalizeFilename(filename, contentType);
+
+  const init = await runway('/uploads', {
+    method: 'POST',
+    // `type` la LOAI UPLOAD, enum chi nhan "ephemeral" - khong phai MIME type.
+    // Gui MIME type vao day se bi tu choi 400 "expected \"ephemeral\"".
+    body: { filename: name, type: 'ephemeral' },
+  });
+
+  const form = new FormData();
+  for (const [k, v] of Object.entries(init.fields || {})) form.append(k, v);
+  form.append('file', new Blob([bytes], { type: contentType }), name);
+
+  const up = await fetch(init.uploadUrl, { method: 'POST', body: form });
+  if (!up.ok) {
+    const t = await up.text().catch(() => '');
+    throw Object.assign(new Error(`Upload that bai (${up.status})`), {
+      status: 502, details: t.slice(0, 400),
+    });
+  }
+  return { uri: init.runwayUri, filename: name };
+}
+
 // --- Upload (client gui raw bytes, ten file o header) ---
 app.post('/api/upload', express.raw({ type: '*/*', limit: '200mb' }), wrap(async (req, res) => {
   // Client ma hoa ten file (co the chua dau tieng Viet) de header hop le
   const rawName = req.get('X-Filename') || 'upload';
   let filename;
   try { filename = decodeURIComponent(rawName); } catch { filename = rawName; }
-  const contentType = req.get('X-Content-Type') || 'application/octet-stream';
-  if (!req.body?.length) return res.status(400).json({ error: 'Body rong' });
 
-  // Runway suy loai media tu DUOI FILE, khong tu content-type. File khong co
-  // duoi (vd: anh dan tu clipboard ten "blob") se bi tu choi, nen tu bu duoi vao.
-  if (!/\.[a-z0-9]{2,5}$/i.test(filename)) {
-    filename = `${filename || 'upload'}${extFromMime(contentType)}`;
-  }
-  // filename co rang buoc minLength 3 / maxLength 255 trong spec
-  if (filename.length < 3) filename = `file-${filename}`;
-  if (filename.length > 255) {
-    const ext = extname(filename);
-    filename = filename.slice(0, 255 - ext.length) + ext;
-  }
-
-  const init = await runway('/uploads', {
-    method: 'POST',
-    // `type` la LOAI UPLOAD, enum chi nhan "ephemeral" - khong phai MIME type.
-    // Gui MIME type vao day se bi tu choi 400 "expected \"ephemeral\"".
-    body: { filename, type: 'ephemeral' },
-  });
-  const form = new FormData();
-  for (const [k, v] of Object.entries(init.fields || {})) form.append(k, v);
-  form.append('file', new Blob([req.body], { type: contentType }), filename);
-
-  const up = await fetch(init.uploadUrl, { method: 'POST', body: form });
-  if (!up.ok) {
-    const t = await up.text().catch(() => '');
-    return res.status(502).json({ error: `Upload that bai (${up.status})`, details: t.slice(0, 400) });
-  }
-  res.json({ uri: init.runwayUri, filename });
+  res.json(await uploadAsset({
+    bytes: req.body,
+    filename,
+    contentType: req.get('X-Content-Type') || 'application/octet-stream',
+  }));
 }));
 
 // --- Lich su ---
@@ -697,7 +723,7 @@ app.post('/api/save', wrap(async (req, res) => {
 }));
 
 // --- Pipeline nhieu canh: project / entity / video / scene ---
-app.use('/api/pipeline', pipelineRouter({ enqueue, outDir: OUT_DIR }));
+app.use('/api/pipeline', pipelineRouter({ enqueue, outDir: OUT_DIR, uploadAsset }));
 
 // --- Quan tri nguoi dung ---
 app.get('/api/users', requireAdmin, wrap(async (_req, res) => {

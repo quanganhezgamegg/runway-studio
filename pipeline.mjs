@@ -10,6 +10,9 @@
  *   2. Anh khung dau cho tung canh      -> text_to_image (turbo + ref entity)
  *   3. Clip cho tung canh               -> image_to_video (tu anh buoc 2)
  */
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { basename, extname, join } from 'node:path';
 import express from 'express';
 import {
   CHAIN_TYPES,
@@ -33,6 +36,7 @@ import {
   hasFfmpeg,
   videoStatus,
 } from './batch.mjs';
+import { estimateVideo } from './pricing.mjs';
 
 /**
  * @param {object} deps
@@ -65,16 +69,53 @@ export function buildRefPayload(e, project) {
 }
 
 /** Buoc 2: anh khung dau cho mot canh, kem anh tham chieu cua entity trong canh. */
+export const MAX_REF_IMAGES = 3;
+
+/** Ky tu con duoc coi la thuoc cung mot tu — dung de chan khop mot phan. */
+const WORD_CHAR = /[a-z0-9_]/;
+
 export function buildImagePayload(s, video, project) {
-  const refs = s.entity_ids
+  const all = s.entity_ids
     .map((id) => entities.get(id))
     .filter((e) => e?.ref_uri)
-    .map((e) => ({ uri: e.ref_uri, tag: entityTag(e.name) }));
+    .map((e) => ({ uri: e.ref_uri, tag: entityTag(e.name), name: e.name }));
+
+  const basePrompt = s.image_prompt.trim();
+
+  // Spec cho TOI DA 3 anh tham chieu moi lan goi. Gui 4 la bi tu choi 400,
+  // nen phai tu chon. Uu tien entity ma prompt CO nhac @tag — do la y cua
+  // nguoi viet prompt; con lai lay theo thu tu.
+  // Tim "@tag" nhung khong cho khop mot phan: tag `sap` khong duoc tinh la
+  // da nhac khi prompt viet `@sap_ca`. Khong dung RegExp o day vi tag do
+  // nguoi dung dat, nhet thang vao regex la sai khi ten co ky tu dac biet.
+  const mentioned = (t) => {
+    const hay = basePrompt.toLowerCase();
+    const needle = `@${t.toLowerCase()}`;
+    for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + 1)) {
+      const after = hay[i + needle.length];
+      if (after === undefined || !WORD_CHAR.test(after)) return true;
+    }
+    return false;
+  };
+  const ordered = [...all.filter((r) => mentioned(r.tag)), ...all.filter((r) => !mentioned(r.tag))];
+  const refs = ordered.slice(0, MAX_REF_IMAGES);
+  const dropped = ordered.slice(MAX_REF_IMAGES);
 
   // gen4_image_turbo BAT BUOC co referenceImages. Khong co ref nao thi phai
   // lui ve gen4_image, dat hon nhung khong bi tu choi.
   const model = refs.length ? SCENE_IMAGE_MODEL : REF_IMAGE_MODEL;
-  const promptText = [s.image_prompt.trim(), project?.material?.trim()]
+
+  // Tai lieu Runway: tag "is used to reference the image in prompt text".
+  // Gui anh tham chieu ma prompt khong nhac @tag thi model bo qua anh do —
+  // that am tham, va ket qua la nhan vat khac han giua cac canh. Nen tag nao
+  // chua duoc nhac thi tu noi vao cuoi prompt.
+  const unmentioned = refs.filter((r) => !mentioned(r.tag)).map((r) => `@${r.tag}`);
+
+  const promptText = [
+    basePrompt,
+    unmentioned.length ? `Featuring ${unmentioned.join(', ')}` : '',
+    project?.material?.trim(),
+  ]
     .filter(Boolean)
     .join('. ');
 
@@ -86,6 +127,7 @@ export function buildImagePayload(s, video, project) {
     payload,
     title: `Canh ${s.display_order + 1}: anh`,
     usedRefs: refs.map((r) => r.tag),
+    droppedRefs: dropped.map((r) => r.name),
   };
 }
 
@@ -122,7 +164,26 @@ export function buildVideoPayload(s, video) {
   };
 }
 
-export function pipelineRouter({ enqueue, outDir }) {
+/** MIME theo duoi file — Runway can content-type dung khi upload lai. */
+const MIME = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+  '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4',
+  '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
+};
+const mimeOf = (file) => MIME[extname(file).toLowerCase()] ?? 'application/octet-stream';
+
+/** Ten file an toan, giu duoi goc. */
+function safeName(name) {
+  const ext = extname(name || '').toLowerCase().slice(0, 6);
+  const stem = basename(name || 'file', extname(name || ''))
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    // d/D gach ngang khong tach dau khi NFD nen phai doi tay
+    .replace(/đ/g, 'd').replace(/Đ/g, 'D')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  return `${stem || 'file'}${ext || '.bin'}`;
+}
+
+export function pipelineRouter({ enqueue, outDir, uploadAsset }) {
   const r = express.Router();
 
   const wrap = (fn) => (req, res) =>
@@ -132,6 +193,79 @@ export function pipelineRouter({ enqueue, outDir }) {
 
   const bad = (res, msg) => res.status(400).json({ error: msg });
   const missing = (res, what) => res.status(404).json({ error: `Khong tim thay ${what}` });
+
+  const UP_DIR = join(outDir, 'uploads');
+
+  /**
+   * Nhan raw bytes tu client: luu ban goc xuong volume RUOI day len Runway.
+   *
+   * Phai giu ban goc vi upload cua Runway la "ephemeral" — spec noi ro
+   * "will be automatically expired and deleted after a period of time".
+   * Khong giu thi vai ngay sau anh tham chieu cua entity bien mat.
+   */
+  async function takeUpload(req, prefix) {
+    if (!req.body?.length) throw Object.assign(new Error('File rong'), { status: 400 });
+
+    let raw = req.get('X-Filename') || 'upload';
+    try { raw = decodeURIComponent(raw); } catch { /* giu nguyen */ }
+    const contentType = req.get('X-Content-Type') || 'application/octet-stream';
+
+    // Upload TRUOC de lay ten da chuan hoa (da bu duoi file theo MIME), roi
+    // moi luu ban goc theo dung ten do. Neu luu theo ten goc thi file dan tu
+    // clipboard ("blob", khong duoi) se thanh .bin, va lan upload lai
+    // mimeOf() doc ra octet-stream -> Runway tu choi.
+    const { uri, filename } = await uploadAsset({ bytes: req.body, filename: raw, contentType });
+
+    const name = `${prefix}-${Date.now()}-${safeName(filename)}`;
+    await mkdir(UP_DIR, { recursive: true });
+    await writeFile(join(UP_DIR, name), req.body);
+
+    return { uri, local: `/outputs/uploads/${name}` };
+  }
+
+  /**
+   * Upload LAI tu ban goc de co URI con han.
+   *
+   * Moi URI cua Runway deu co han — link ket qua ~48h, upload thi "expired
+   * after a period of time". Pipeline dung lai anh tham chieu nhieu ngay sau
+   * khi sinh, nen cu truoc moi lan sinh thi day lai ban goc len. Upload
+   * khong ton credit, doi lay viec khong bao gio gap URI chet.
+   */
+  async function freshUri(localUrl, currentUri) {
+    if (!localUrl) return currentUri;
+    const file = join(outDir, localUrl.replace(/^\/outputs\//, ''));
+    if (!existsSync(file)) return currentUri;
+    try {
+      const { uri } = await uploadAsset({
+        bytes: await readFile(file), filename: basename(file), contentType: mimeOf(file),
+      });
+      return uri;
+    } catch (e) {
+      // Khong chan viec sinh: URI cu co the van con han
+      console.warn(`[pipeline] upload lai that bai (${basename(file)}): ${e.message}`);
+      return currentUri;
+    }
+  }
+
+  /** Lam moi URI anh tham chieu cua moi entity trong canh. */
+  async function freshSceneRefs(sc) {
+    for (const id of sc.entity_ids) {
+      const e = entities.get(id);
+      if (!e?.ref_local) continue;
+      const uri = await freshUri(e.ref_local, e.ref_uri);
+      if (uri && uri !== e.ref_uri) entities.update(id, { ref_uri: uri });
+    }
+  }
+
+  /** Lam moi URI anh khung dau cua canh, tra ve ban da cap nhat. */
+  async function freshSceneImage(sc) {
+    if (!sc.image_local) return sc;
+    const uri = await freshUri(sc.image_local, sc.image_uri);
+    if (uri && uri !== sc.image_uri) scenes.update(sc.id, { image_uri: uri });
+    return scenes.get(sc.id);
+  }
+
+  const rawBody = express.raw({ type: '*/*', limit: '60mb' });
 
   // -------------------------------------------------------------------------
   // Hang so cho frontend
@@ -233,6 +367,22 @@ export function pipelineRouter({ enqueue, outDir }) {
     res.json({ job, entity: withTag(entities.get(e.id)) });
   }));
 
+  /**
+   * Dung anh CO SAN lam anh tham chieu, thay vi sinh ra.
+   *
+   * Day la duong duy nhat de dua nguoi that / logo that / san pham that vao
+   * pipeline — model khong ve lai duoc cai da ton tai.
+   */
+  r.post('/entities/:id/ref-upload', rawBody, wrap(async (req, res) => {
+    const e = entities.get(req.params.id);
+    if (!e) return missing(res, 'entity');
+
+    const { uri, local } = await takeUpload(req, `ref-${e.id}`);
+    // ref_job_id = null: anh nay khong den tu job nao, xoa de khoi hien "dang sinh"
+    entities.update(e.id, { ref_uri: uri, ref_local: local, ref_job_id: null });
+    res.json({ entity: withTag(entities.get(e.id)) });
+  }));
+
   // -------------------------------------------------------------------------
   // Video
   // -------------------------------------------------------------------------
@@ -302,11 +452,35 @@ export function pipelineRouter({ enqueue, outDir }) {
 
     const v = videos.get(s2.video_id);
     const p = v ? projects.get(v.project_id) : null;
-    const { usedRefs, ...spec } = buildImagePayload(s2, v, p);
+
+    // URI cua Runway co han, nen day lai ban goc len truoc khi dung
+    await freshSceneRefs(s2);
+    const { usedRefs, droppedRefs, ...spec } = buildImagePayload(s2, v, p);
 
     const job = enqueue({ ...spec, user: req.user.name });
     scenes.update(s2.id, { image_job_id: job.jobId });
-    res.json({ job, scene: scenes.get(s2.id), usedRefs });
+    res.json({
+      job,
+      scene: scenes.get(s2.id),
+      usedRefs,
+      droppedRefs,
+      note: droppedRefs.length
+        ? `Runway chỉ nhận ${MAX_REF_IMAGES} ảnh tham chiếu mỗi ảnh — đã bỏ: ${droppedRefs.join(', ')}`
+        : undefined,
+    });
+  }));
+
+  /**
+   * Dung anh CO SAN lam anh khung dau, bo qua buoc sinh anh.
+   * Tiet kiem 2-8 credit moi canh, va cho phep tu chon khung mo dau.
+   */
+  r.post('/scenes/:id/image-upload', rawBody, wrap(async (req, res) => {
+    const sc = scenes.get(req.params.id);
+    if (!sc) return missing(res, 'scene');
+
+    const { uri, local } = await takeUpload(req, `frame-${sc.id}`);
+    scenes.update(sc.id, { image_uri: uri, image_local: local, image_job_id: null });
+    res.json({ scene: scenes.get(sc.id) });
   }));
 
   /** Buoc 3: sinh clip tu anh khung dau cua canh. */
@@ -319,7 +493,8 @@ export function pipelineRouter({ enqueue, outDir }) {
     const prompt = (s2.video_prompt || s2.image_prompt || '').trim();
     if (!prompt) return bad(res, 'Canh chua co mo ta chuyen dong');
 
-    const job = enqueue({ ...buildVideoPayload(s2, v), user: req.user.name });
+    const fresh = await freshSceneImage(s2);
+    const job = enqueue({ ...buildVideoPayload(fresh, v), user: req.user.name });
     scenes.update(s2.id, { video_job_id: job.jobId });
     res.json({ job, scene: scenes.get(s2.id) });
   }));
@@ -335,10 +510,32 @@ export function pipelineRouter({ enqueue, outDir }) {
     res.json({ ...st, ffmpeg: await hasFfmpeg() });
   }));
 
+  /**
+   * Uoc tinh credit cho phan CON LAI cua video.
+   *
+   * Tinh o server de CLI va giao dien khong bao giờ lech con so. Chi tinh
+   * viec chua lam — da co anh tham chieu thi khong tinh lai.
+   */
+  r.get('/videos/:id/cost', wrap(async (req, res) => {
+    const v = videos.get(req.params.id);
+    if (!v) return missing(res, 'video');
+    const p = projects.get(v.project_id);
+    res.json(
+      estimateVideo({
+        video: v,
+        scenes: scenes.listForVideo(v.id),
+        entities: p ? entities.listForProject(p.id) : [],
+        refModel: REF_IMAGE_MODEL,
+        sceneImageModel: SCENE_IMAGE_MODEL,
+        refRatioOf: (e) => (ENTITY_REF_STYLE[e.entity_type] ?? ENTITY_REF_STYLE.other).ratio,
+      })
+    );
+  }));
+
   /** Sinh anh tham chieu cho MOI entity chua co. */
   r.post('/projects/:id/gen-refs', wrap(async (req, res) => {
     res.json(
-      genAllRefs(req.params.id, {
+      await genAllRefs(req.params.id, {
         enqueue,
         user: req.user.name,
         buildRefPayload,
@@ -352,12 +549,13 @@ export function pipelineRouter({ enqueue, outDir }) {
    */
   r.post('/videos/:id/gen-images', wrap(async (req, res) => {
     res.json(
-      genAllImages(req.params.id, {
+      await genAllImages(req.params.id, {
         enqueue,
         user: req.user.name,
         force: req.body?.force === true,
+        refresh: freshSceneRefs,
         buildImagePayload: (sc, v, p) => {
-          const { usedRefs, ...spec } = buildImagePayload(sc, v, p);
+          const { usedRefs, droppedRefs, ...spec } = buildImagePayload(sc, v, p);
           return spec;
         },
       })
@@ -367,9 +565,10 @@ export function pipelineRouter({ enqueue, outDir }) {
   /** Sinh clip cho MOI canh da co anh khung dau. */
   r.post('/videos/:id/gen-clips', wrap(async (req, res) => {
     res.json(
-      genAllClips(req.params.id, {
+      await genAllClips(req.params.id, {
         enqueue,
         user: req.user.name,
+        refresh: freshSceneImage,
         buildVideoPayload,
       })
     );

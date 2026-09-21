@@ -95,6 +95,23 @@ const send = <T>(path: string, method: string, data?: unknown) =>
     body: data === undefined ? undefined : JSON.stringify(data),
   });
 
+/**
+ * Gui raw bytes cua file. Ten file ma hoa o header vi co the chua dau tieng Viet
+ * — header HTTP chi nhan latin-1.
+ */
+const upload = <T>(path: string, file: File) => {
+  const type = file.type || 'application/octet-stream';
+  return req<T>(path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': type,
+      'X-Filename': encodeURIComponent(file.name),
+      'X-Content-Type': type,
+    },
+    body: file,
+  });
+};
+
 export const pipe = {
   meta: () =>
     req<{ entityTypes: EntityType[]; chainTypes: ChainType[]; refStyle: Record<string, RefStyle> }>(
@@ -121,6 +138,14 @@ export const pipe = {
   genRef: (entityId: string, material: string) =>
     send<{ entity: Entity }>(`/entities/${entityId}/ref`, 'POST', { material }),
 
+  /**
+   * Dung anh CO SAN lam anh tham chieu, thay vi sinh ra.
+   * Duong duy nhat de dua nguoi that / logo that vao pipeline.
+   * Khong ton credit.
+   */
+  uploadRef: (entityId: string, file: File) =>
+    upload<{ entity: Entity }>(`/entities/${entityId}/ref-upload`, file),
+
   // --- Video ---
   video: (id: string) => req<VideoDetail>(`/videos/${id}`),
   createVideo: (projectId: string, data: Partial<Video>) =>
@@ -138,7 +163,15 @@ export const pipe = {
 
   /** Buoc 2: sinh anh khung dau, dung anh tham chieu cua entity trong canh. */
   genSceneImage: (sceneId: string) =>
-    send<{ scene: Scene; usedRefs: string[] }>(`/scenes/${sceneId}/image`, 'POST', {}),
+    send<{ scene: Scene; usedRefs: string[]; droppedRefs: string[]; note?: string }>(
+      `/scenes/${sceneId}/image`,
+      'POST',
+      {}
+    ),
+
+  /** Dung anh CO SAN lam khung dau, bo qua buoc sinh anh (tiet kiem 2-8 credit). */
+  uploadFrame: (sceneId: string, file: File) =>
+    upload<{ scene: Scene }>(`/scenes/${sceneId}/image-upload`, file),
 
   /** Buoc 3: sinh clip tu anh khung dau. */
   genSceneVideo: (sceneId: string) => send<{ scene: Scene }>(`/scenes/${sceneId}/video`, 'POST', {}),
@@ -147,6 +180,9 @@ export const pipe = {
 
   /** Trang thai pipeline: xong gi, con gi, buoc tiep la gi. */
   status: (videoId: string) => req<PipelineStatus>(`/videos/${videoId}/status`),
+
+  /** Uoc tinh credit cho phan CON LAI. Tinh o server de khong lech voi CLI. */
+  cost: (videoId: string) => req<CostEstimate>(`/videos/${videoId}/cost`),
 
   genAllRefs: (projectId: string) =>
     send<BatchResult>(`/projects/${projectId}/gen-refs`, 'POST', {}),
@@ -182,6 +218,16 @@ export interface PipelineStatus {
   /** So viec SAN SANG chay o tung buoc (du dieu kien, chua gui). */
   ready: { refs: number; images: number; clips: number };
   ffmpeg: boolean;
+}
+
+export interface CostEstimate {
+  credits: number;
+  /** Cach tinh, de nguoi dung hieu con so o dau ra. */
+  lines: string[];
+  /** Co model chua co gia trong bang — so that se cao hon. */
+  unknown: boolean;
+  remaining: { refs: number; images: number; clips: number };
+  note?: string;
 }
 
 export interface BatchResult {

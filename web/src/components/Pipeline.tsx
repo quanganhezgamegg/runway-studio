@@ -17,6 +17,46 @@ import {
 import type { Entity, EntityType, Scene, StepState } from '@/api/pipeline';
 import { Button, Field, Input, Select, fmt, toast } from './ui';
 
+/**
+ * Nut chon file de dung anh CO SAN.
+ *
+ * Dung `<label>` bao `<input type=file>` an di, thay vi ref + click(): nhu vay
+ * ban phim va trinh doc man hinh dung duoc ma khong can code them.
+ */
+function UploadButton({
+  label,
+  title,
+  onPick,
+  busy,
+}: {
+  label: string;
+  title: string;
+  onPick: (file: File) => void;
+  busy?: boolean;
+}) {
+  return (
+    <label
+      title={title}
+      className={`inline-flex h-6 cursor-pointer items-center rounded px-2 font-mono text-[10.5px] text-ink-faint
+        transition-colors hover:bg-line hover:text-ink focus-within:ring-1 focus-within:ring-accent
+        ${busy ? 'pointer-events-none opacity-50' : ''}`}
+    >
+      {busy ? '…' : label}
+      <input
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="sr-only"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          // Xoa value de chon LAI cung mot file van kich hoat onChange
+          e.target.value = '';
+          if (f) onPick(f);
+        }}
+      />
+    </label>
+  );
+}
+
 // ---------------------------------------------------------------------------
 export function Pipeline() {
   const qc = useQueryClient();
@@ -233,7 +273,15 @@ function Stages({ projectId, videoId }: { projectId: string; videoId: string }) 
     refetchInterval: 5000,
   });
 
+  // Chi phi con lai: tinh o server nen khong bao gio lech voi CLI
+  const { data: cost } = useQuery({
+    queryKey: ['pl-cost', videoId],
+    queryFn: () => pipe.cost(videoId),
+    refetchInterval: 15000,
+  });
+
   const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['pl-cost', videoId] });
     qc.invalidateQueries({ queryKey: ['pl-status', videoId] });
     qc.invalidateQueries({ queryKey: ['pj', projectId] });
     qc.invalidateQueries({ queryKey: ['pl-video', videoId] });
@@ -323,6 +371,14 @@ function Stages({ projectId, videoId }: { projectId: string; videoId: string }) 
         </span>
         <span className="font-mono text-[10.5px] text-ink-faint">
           {st.clips.total} cảnh · tổng {st.totalDuration}s
+          {cost && cost.credits > 0 && (
+            <>
+              {' · '}
+              <span className="text-warn" title={cost.lines.join('\n')}>
+                còn tốn {cost.credits} credit
+              </span>
+            </>
+          )}
         </span>
       </div>
 
@@ -488,6 +544,15 @@ function EntityCard({
   const step = entityStep(entity);
   const [editing, setEditing] = useState(false);
 
+  const uploadRef = useMutation({
+    mutationFn: (file: File) => pipe.uploadRef(entity.id, file),
+    onSuccess: () => {
+      toast(`Đã gắn ảnh cho @${entity.tag}`, 'ok');
+      qc.invalidateQueries({ queryKey: ['pj', projectId] });
+    },
+    onError: (e: Error) => toast(e.message, 'err'),
+  });
+
   if (editing) {
     return (
       <EntityForm
@@ -529,12 +594,18 @@ function EntityCard({
           </span>
         </div>
 
-        <div className="mt-1.5 flex gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <div className="mt-1.5 flex flex-wrap gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
           {step !== 'pending' && (
             <Button size="sm" variant="ghost" onClick={onGen} title="Sinh ảnh tham chiếu">
               {step === 'done' ? 'Sinh lại' : 'Sinh ảnh'}
             </Button>
           )}
+          <UploadButton
+            label="Tải ảnh"
+            title="Dùng ảnh có sẵn làm ảnh tham chiếu — cách duy nhất để đưa người thật, logo thật vào. Không tốn credit."
+            busy={uploadRef.isPending}
+            onPick={(f) => uploadRef.mutate(f)}
+          />
           <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
             Sửa
           </Button>
@@ -716,6 +787,18 @@ function SceneRow({
     mutationFn: () => pipe.genSceneImage(scene.id),
     onSuccess: (r) => {
       toast(r.usedRefs.length ? `Dùng ref: ${r.usedRefs.map((t) => '@' + t).join(', ')}` : 'Không có ref nào', 'ok');
+      // Runway chi nhan 3 anh tham chieu — phai noi ro ai bi bo, khong thi
+      // nguoi dung tuong nhan vat thu 4 co trong anh
+      if (r.droppedRefs?.length) toast(r.note ?? `Đã bỏ: ${r.droppedRefs.join(', ')}`, 'err');
+      onChange();
+    },
+    onError: (e: Error) => toast(e.message, 'err'),
+  });
+
+  const uploadFrame = useMutation({
+    mutationFn: (file: File) => pipe.uploadFrame(scene.id, file),
+    onSuccess: () => {
+      toast(`Đã gắn ảnh khung đầu cho cảnh ${scene.display_order + 1}`, 'ok');
       onChange();
     },
     onError: (e: Error) => toast(e.message, 'err'),
@@ -788,6 +871,12 @@ function SceneRow({
           >
             {iStep === 'done' ? '↻ ảnh' : 'ảnh'}
           </Button>
+          <UploadButton
+            label="tải"
+            title="Dùng ảnh có sẵn làm khung đầu — bỏ qua bước sinh ảnh, tiết kiệm 2-8 credit"
+            busy={uploadFrame.isPending}
+            onPick={(f) => uploadFrame.mutate(f)}
+          />
           <Button
             size="sm"
             variant="ghost"
