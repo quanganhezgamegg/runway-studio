@@ -35,7 +35,11 @@ COPY package.json package-lock.json* ./
 # tu giai doan web ben duoi nen khong can chay lai.
 RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts && npm cache clean --force
 
-COPY server.mjs ./
+# Copy MOI module .mjs o goc, khong liet ke tung file.
+# Truoc day chi copy server.mjs nen khi them store/pipeline/batch.mjs thi
+# container crash-loop voi ERR_MODULE_NOT_FOUND — liet ke tung file la mam
+# loi kieu do moi lan them module.
+COPY *.mjs ./
 COPY scripts/ ./scripts/
 COPY spec/ ./spec/
 
