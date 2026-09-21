@@ -43,8 +43,9 @@ COPY spec/ ./spec/
 COPY --from=web /build/public/catalog.json ./public/catalog.json
 COPY --from=web /build/public/dist ./public/dist
 
-# su-exec de entrypoint ha quyen tu root xuong node sau khi chown volume
-RUN apk add --no-cache su-exec
+# su-exec: entrypoint ha quyen tu root xuong node sau khi chown volume
+# ffmpeg : ghep cac canh thanh mot video, chen thuyet minh va nhac
+RUN apk add --no-cache su-exec ffmpeg
 
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh  && mkdir -p data outputs  && chown -R node:node /app

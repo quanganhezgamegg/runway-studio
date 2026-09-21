@@ -22,6 +22,8 @@ import { dirname, join, extname } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { openStore } from './store.mjs';
+import { onJobFinished, pipelineRouter } from './pipeline.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -42,6 +44,10 @@ const HISTORY_FILE = join(DATA_DIR, 'history.json');
 const USERS_FILE = join(DATA_DIR, 'users.json');
 const SECRET_FILE = join(DATA_DIR, 'secret.key');
 for (const d of [DATA_DIR, OUT_DIR]) if (!existsSync(d)) mkdirSync(d, { recursive: true });
+
+// SQLite cho tang project/entity/scene. Dung node:sqlite co san nen khong
+// them dependency va Docker khong phai build native module.
+openStore(DATA_DIR);
 
 /** Duoi file tuong ung MIME type - Runway suy loai media tu duoi file. */
 const MIME_EXT = {
@@ -420,6 +426,11 @@ async function pollTask(job) {
   // Tu luu ket qua ve dia truoc khi link Runway het han.
   // Khong await: giai phong slot hang doi ngay, tai ve chay nen.
   if (job.state === 'SUCCEEDED') void autoSaveOutputs(job);
+
+  // Ghi ket qua vao tang project/entity/scene neu job nay thuoc pipeline
+  void onJobFinished(job, { download: downloadOutput }).catch((e) =>
+    console.warn(`[pipeline] ${e.message}`)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -684,6 +695,9 @@ app.post('/api/save', wrap(async (req, res) => {
   const name = await downloadOutput(url, jobId, index);
   res.json({ ok: true, file: name, localUrl: `/outputs/${name}` });
 }));
+
+// --- Pipeline nhieu canh: project / entity / video / scene ---
+app.use('/api/pipeline', pipelineRouter({ enqueue }));
 
 // --- Quan tri nguoi dung ---
 app.get('/api/users', requireAdmin, wrap(async (_req, res) => {
