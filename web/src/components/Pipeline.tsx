@@ -28,20 +28,28 @@ function UploadButton({
   title,
   onPick,
   busy,
+  block,
 }: {
   label: string;
   title: string;
   onPick: (file: File) => void;
   busy?: boolean;
+  /** Dang noi bat, dung cho o anh con trong — cho can nut nay nhat. */
+  block?: boolean;
 }) {
+  const base = block
+    ? `flex h-7 items-center justify-center rounded-md border border-accent/40 bg-accent/10 px-3
+       text-[11px] font-medium text-accent hover:border-accent hover:bg-accent/20`
+    : `inline-flex h-6 items-center rounded px-2 font-mono text-[10.5px] text-ink-faint
+       hover:bg-line hover:text-ink`;
+
   return (
     <label
       title={title}
-      className={`inline-flex h-6 cursor-pointer items-center rounded px-2 font-mono text-[10.5px] text-ink-faint
-        transition-colors hover:bg-line hover:text-ink focus-within:ring-1 focus-within:ring-accent
-        ${busy ? 'pointer-events-none opacity-50' : ''}`}
+      className={`cursor-pointer transition-colors focus-within:ring-1 focus-within:ring-accent
+        ${base} ${busy ? 'pointer-events-none opacity-50' : ''}`}
     >
-      {busy ? '…' : label}
+      {busy ? 'đang tải…' : label}
       <input
         type="file"
         accept="image/jpeg,image/png,image/webp"
@@ -501,22 +509,43 @@ function Entities({
       </div>
 
       <p className="mb-3 max-w-[70ch] text-[11.5px] leading-relaxed text-ink-faint">
-        Mô tả ở đây <b className="font-medium text-ink-muted">chỉ là ngoại hình</b> — nó sinh ra
-        ảnh tham chiếu. Hành động thì viết trong từng cảnh, gọi lại bằng
+        Mỗi nhân vật và bối cảnh cần một ảnh tham chiếu — đó là thứ giữ cho chúng
+        giống nhau ở mọi cảnh. <b className="font-medium text-ink-muted">Có ảnh sẵn thì tải lên</b>{' '}
+        (0 credit, và là cách duy nhất để đưa người thật hay logo thật vào); không có thì tả
+        ngoại hình để model vẽ. Mô tả ở đây{' '}
+        <b className="font-medium text-ink-muted">chỉ là ngoại hình</b> — hành động viết trong
+        từng cảnh, gọi lại bằng
         <code className="mx-1 rounded bg-surface-2 px-1 font-mono">@tên</code>.
       </p>
 
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2.5">
-        {project.entities.map((e) => (
-          <EntityCard
-            key={e.id}
-            entity={e}
-            onGen={() => genRef.mutate(e.id)}
-            onDelete={() => del.mutate(e.id)}
-            projectId={project.id}
-          />
-        ))}
-      </div>
+      {project.entities.length === 0 ? (
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="flex w-full flex-col items-center gap-1 rounded-lg border border-dashed border-line
+            px-4 py-7 text-center transition-colors hover:border-accent/60 hover:bg-surface"
+        >
+          <span className="text-[12.5px] font-medium text-ink">
+            Thêm nhân vật hoặc bối cảnh
+          </span>
+          <span className="max-w-[46ch] text-[11px] leading-relaxed text-ink-faint">
+            Tạo xong sẽ có nút <b className="font-medium text-ink-muted">Tải ảnh lên</b> ngay
+            trên thẻ, để bạn dùng ảnh của mình.
+          </span>
+        </button>
+      ) : (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2.5">
+          {project.entities.map((e) => (
+            <EntityCard
+              key={e.id}
+              entity={e}
+              onGen={() => genRef.mutate(e.id)}
+              onDelete={() => del.mutate(e.id)}
+              projectId={project.id}
+            />
+          ))}
+        </div>
+      )}
 
       {adding && <EntityForm projectId={project.id} onDone={() => setAdding(false)} />}
     </section>
@@ -576,11 +605,33 @@ function EntityCard({
             loading="lazy"
             className="h-full w-full object-cover"
           />
-        ) : (
+        ) : step === 'pending' ? (
           <div className="grid h-full place-items-center px-2 text-center">
-            <span className="font-mono text-[10px] text-ink-faint">
-              {step === 'pending' ? 'đang sinh…' : 'chưa có ảnh'}
-            </span>
+            <span className="font-mono text-[10px] text-ink-faint">đang sinh…</span>
+          </div>
+        ) : (
+          /*
+           * O anh trong la cho nguoi dung DANG can dua anh vao, nen dat nut
+           * ngay day thay vi de chu "chua co anh" roi an nut sau hover —
+           * an nut cho hanh dong chinh thi khong ai tim thay.
+           */
+          <div className="flex h-full flex-col items-center justify-center gap-1.5 px-2">
+            <UploadButton
+              block
+              label="Tải ảnh lên"
+              title="Dùng ảnh có sẵn của bạn làm ảnh tham chiếu — cách duy nhất để đưa người thật, logo thật vào. Không tốn credit."
+              busy={uploadRef.isPending}
+              onPick={(f) => uploadRef.mutate(f)}
+            />
+            <span className="font-mono text-[9.5px] text-ink-faint">hoặc</span>
+            <button
+              type="button"
+              onClick={onGen}
+              className="font-mono text-[10px] text-ink-faint underline decoration-dotted hover:text-ink"
+              title="Để model vẽ ảnh tham chiếu từ mô tả ngoại hình"
+            >
+              sinh ảnh
+            </button>
           </div>
         )}
       </div>
@@ -594,18 +645,24 @@ function EntityCard({
           </span>
         </div>
 
+        {/*
+          Hang nut phu: chi hien khi tro chuot vao. Duoc, vi day la cac hanh
+          dong THU CAP — hanh dong chinh (dua anh vao) da nam ngay o o anh.
+        */}
         <div className="mt-1.5 flex flex-wrap gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-          {step !== 'pending' && (
-            <Button size="sm" variant="ghost" onClick={onGen} title="Sinh ảnh tham chiếu">
-              {step === 'done' ? 'Sinh lại' : 'Sinh ảnh'}
-            </Button>
+          {step === 'done' && (
+            <>
+              <Button size="sm" variant="ghost" onClick={onGen} title="Sinh lại ảnh tham chiếu">
+                Sinh lại
+              </Button>
+              <UploadButton
+                label="Đổi ảnh"
+                title="Thay bằng ảnh có sẵn khác. Không tốn credit."
+                busy={uploadRef.isPending}
+                onPick={(f) => uploadRef.mutate(f)}
+              />
+            </>
           )}
-          <UploadButton
-            label="Tải ảnh"
-            title="Dùng ảnh có sẵn làm ảnh tham chiếu — cách duy nhất để đưa người thật, logo thật vào. Không tốn credit."
-            busy={uploadRef.isPending}
-            onPick={(f) => uploadRef.mutate(f)}
-          />
           <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
             Sửa
           </Button>
