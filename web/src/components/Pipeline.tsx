@@ -690,12 +690,33 @@ function EntityForm({
   const [desc, setDesc] = useState(entity?.description ?? '');
   const [voice, setVoice] = useState(entity?.voice_description ?? '');
 
+  // Anh chon trong form: giu lai roi upload SAU khi entity co id
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(
+    entity?.ref_local ?? entity?.ref_uri ?? null
+  );
+
+  useEffect(() => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    // Tra lai bo nho khi doi anh khac hoac dong form
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const data = { name, entity_type: type, description: desc, voice_description: voice };
-      return entity ? pipe.updateEntity(entity.id, data) : pipe.createEntity(projectId, data);
+      const saved = entity
+        ? await pipe.updateEntity(entity.id, data)
+        : await pipe.createEntity(projectId, data);
+      // Entity phai co id truoc moi upload duoc, nen lam o day chu khong
+      // bat nguoi dung tao xong roi di tim nut tren the
+      if (file) await pipe.uploadRef(saved.id, file);
+      return saved;
     },
     onSuccess: () => {
+      if (file) toast('Đã thêm kèm ảnh tham chiếu', 'ok');
       qc.invalidateQueries({ queryKey: ['pj', projectId] });
       onDone();
     },
@@ -719,7 +740,52 @@ function EntityForm({
         </Field>
       </div>
 
-      <Field label="Mô tả ngoại hình" hint="chỉ ngoại hình, không mô tả hành động">
+      {/*
+        O anh dat NGAY TRONG form: nguoi dung co anh that thi day la viec dau
+        tien ho muon lam. Bat tao entity xong roi di tim nut tren the la mot
+        buoc thua, va thuc te nguoi dung khong tim thay.
+      */}
+      <Field
+        label="Ảnh tham chiếu"
+        hint="có ảnh sẵn thì tải lên — 0 credit, và là cách duy nhất để đưa người thật, logo thật vào"
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-[72px] w-[72px] shrink-0 overflow-hidden rounded-md border border-line bg-surface-2">
+            {preview ? (
+              <img src={preview} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <div className="grid h-full place-items-center font-mono text-[9px] text-ink-faint">
+                chưa có
+              </div>
+            )}
+          </div>
+          <div className="min-w-0">
+            <UploadButton
+              block
+              label={preview ? 'Chọn ảnh khác' : 'Tải ảnh lên'}
+              title="JPG, PNG hoặc WebP. Nhân vật: toàn thân, chính diện, nền trơn. Bối cảnh: wide shot, không có người."
+              onPick={setFile}
+            />
+            {file && (
+              <div className="mt-1 truncate font-mono text-[10px] text-ink-faint">{file.name}</div>
+            )}
+            {!preview && (
+              <div className="mt-1 text-[10.5px] leading-snug text-ink-faint">
+                Không có ảnh thì tả ngoại hình bên dưới, model sẽ vẽ (5 credit).
+              </div>
+            )}
+          </div>
+        </div>
+      </Field>
+
+      <Field
+        label="Mô tả ngoại hình"
+        hint={
+          preview
+            ? 'đã có ảnh nên không cần — ảnh luôn thắng mô tả'
+            : 'chỉ ngoại hình, không mô tả hành động'
+        }
+      >
         <textarea
           rows={2}
           value={desc}
@@ -739,13 +805,21 @@ function EntityForm({
         </Field>
       )}
 
-      <div className="mt-3 flex gap-2">
-        <Button variant="primary" size="sm" onClick={() => save.mutate()} disabled={!name.trim()}>
-          {entity ? 'Lưu' : 'Thêm'}
+      <div className="mt-3 flex items-center gap-2">
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => save.mutate()}
+          disabled={!name.trim() || save.isPending}
+        >
+          {save.isPending ? 'đang lưu…' : entity ? 'Lưu' : 'Thêm'}
         </Button>
-        <Button size="sm" variant="ghost" onClick={onDone}>
+        <Button size="sm" variant="ghost" onClick={onDone} disabled={save.isPending}>
           Bỏ
         </Button>
+        {!name.trim() && (
+          <span className="font-mono text-[10px] text-warn">cần nhập Tên trước</span>
+        )}
       </div>
     </div>
   );
