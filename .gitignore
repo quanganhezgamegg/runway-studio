@@ -20,6 +20,12 @@ outputs/
 .rw.json
 .rw-session
 
+# Anh nguoi that / logo / san pham nguoi dung bo vao - KHONG day len GitHub
+# Phai loai NOI DUNG (anh/*) chu khong loai thu muc (anh/): git khong di vao
+# thu muc da bi loai, nen dong `!` ben duoi se vo hieu.
+anh/*
+!anh/DOC-TRUOC.md
+
 # Linh tinh
 *.log
 npm-debug.log*
