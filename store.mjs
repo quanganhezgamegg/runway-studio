@@ -328,6 +328,26 @@ export const videos = {
   },
 };
 
+/**
+ * Loc va kiem danh sach entity_id truoc khi ghi.
+ *
+ * Bang scene_entity co khoa ngoai toi entity, nen id sai se lam INSERT nem
+ * loi. Neu de loi do xay ra GIUA lenh xoa va lenh chen thi lien ket cu mat
+ * sach — canh thanh khong co nhan vat nao, va anh sinh ra se khong con giu
+ * nhan vat. Vi vay phai kiem het truoc khi ghi bat cu thu gi.
+ */
+function checkEntityIds(entityIds) {
+  const wanted = [...new Set(entityIds ?? [])].filter(Boolean);
+  const unknown = wanted.filter((id) => !entities.get(id));
+  if (unknown.length) {
+    throw Object.assign(new Error(`Khong tim thay entity: ${unknown.join(', ')}`), {
+      status: 400,
+      details: { unknown },
+    });
+  }
+  return wanted;
+}
+
 // ---------------------------------------------------------------------------
 // Scene
 // ---------------------------------------------------------------------------
@@ -355,6 +375,10 @@ export const scenes = {
 
   create({ videoId, display_order = null, image_prompt = '', video_prompt = '',
            duration = 8, chain_type = 'ROOT', parent_scene_id = null, entity_ids = [] }) {
+    // Kiem truoc khi INSERT, khong thi entity_ids sai se de lai mot canh
+    // mo coi khong co entity nao
+    checkEntityIds(entity_ids);
+
     const id = newId('s');
     const t = now();
 
@@ -377,6 +401,8 @@ export const scenes = {
   update(id, patch) {
     const cur = scenes.get(id);
     if (!cur) return null;
+    // Kiem entity_ids truoc moi lenh ghi, de yeu cau sai khong sua nua vo
+    if (Array.isArray(patch.entity_ids)) checkEntityIds(patch.entity_ids);
     const n = { ...cur, ...patch, updated_at: now() };
     run(
       `UPDATE scene SET display_order=?, image_prompt=?, video_prompt=?, duration=?,
@@ -392,10 +418,21 @@ export const scenes = {
     return scenes.get(id);
   },
 
+  /**
+   * Dat lai danh sach entity cua mot canh.
+   *
+   * Loc id khong ton tai TRUOC khi xoa. Truoc day xoa lien ket cu roi moi
+   * chen, nen mot id sai lam INSERT nem "FOREIGN KEY constraint failed" —
+   * luc do lien ket cu DA MAT, canh thanh khong co entity nao ma nguoi dung
+   * khong he biet. Mat lien ket nghia la anh canh sinh ra khong con giu
+   * nhan vat, nen day la loi pha du lieu chu khong chi la loi hien thi.
+   */
   setEntities(sceneId, entityIds) {
+    // Kiem TRUOC khi xoa: yeu cau sai thi khong duoc thay doi gi ca
+    const wanted = checkEntityIds(entityIds);
     run('DELETE FROM scene_entity WHERE scene_id = ?', sceneId);
     const ins = db.prepare('INSERT OR IGNORE INTO scene_entity (scene_id, entity_id) VALUES (?, ?)');
-    for (const eid of entityIds ?? []) ins.run(sceneId, eid);
+    for (const eid of wanted) ins.run(sceneId, eid);
   },
 
   /** Doi thu tu hang loat: [{id, display_order}] */
