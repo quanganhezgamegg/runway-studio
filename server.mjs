@@ -526,9 +526,36 @@ app.get('/api/me', (req, res) => {
   res.json({ name: u.name, role: u.role || 'member', hasKey: !!API_KEY });
 });
 
+/**
+ * Ban nao dang chay — KHONG can dang nhap.
+ *
+ * Can cho viec kiem tra sau khi deploy. Thay doi chi o backend thi khong
+ * lam doi hash bundle frontend, nen tu ngoai khong co cach nao biet container
+ * moi da len chua; da tung dan den bao sai rang ban moi dang chay trong khi
+ * container con dang crash-loop.
+ *
+ * Chi tra commit ngan va thoi diem khoi dong: khong co bi mat, khong co
+ * thong tin ve cau hinh hay moi truong.
+ */
+const STARTED_AT = new Date().toISOString();
+const COMMIT = (
+  process.env.RAILWAY_GIT_COMMIT_SHA ||
+  process.env.GIT_COMMIT ||
+  process.env.SOURCE_COMMIT ||
+  ''
+).slice(0, 7);
+
+app.get('/api/version', (_req, res) => {
+  res.json({
+    commit: COMMIT || null,
+    startedAt: STARTED_AT,
+    uptimeSeconds: Math.round(process.uptime()),
+  });
+});
+
 // Tat ca /api/* con lai deu can dang nhap
 app.use('/api', (req, res, next) => {
-  if (['/login', '/logout', '/me'].includes(req.path)) return next();
+  if (['/login', '/logout', '/me', '/version'].includes(req.path)) return next();
   requireAuth(req, res, next);
 });
 
