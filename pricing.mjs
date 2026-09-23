@@ -90,10 +90,20 @@ export function estimateVideo({ video, scenes, entities, refModel, sceneImageMod
   if (todoImages.length) {
     let sum = 0;
     for (const s of todoImages) {
-      // Canh co entity da co anh tham chieu thi dung turbo (2cr), khong thi
-      // phai lui ve gen4_image vi turbo BAT BUOC co referenceImages
-      const hasRef = (s.entity_ids ?? []).some((id) => entities.find((e) => e.id === id)?.ref_uri);
-      const model = hasRef ? sceneImageModel : refModel;
+      /*
+       * Canh co anh tham chieu thi dung turbo (2cr), khong thi phai lui ve
+       * gen4_image (5cr) vi turbo BAT BUOC co referenceImages.
+       *
+       * Tinh theo "se co ref khi chay den buoc nay", khong phai "da co ref
+       * ngay bay gio": nguoi dung dang can biet chay CA pipeline het bao
+       * nhieu, ma buoc 1 luon chay truoc buoc 2. Lay moc "ngay bay gio" se
+       * bao dat hon thuc te va lam ho tuong la khong du tien.
+       */
+      const willHaveRef = (s.entity_ids ?? []).some((id) => {
+        const e = entities.find((x) => x.id === id);
+        return !!e && (!!e.ref_uri || !!e.ref_job_id || !!e.description?.trim());
+      });
+      const model = willHaveRef ? sceneImageModel : refModel;
       const c = imageCost(model, video.ratio);
       if (c == null) { unknown = true; continue; }
       sum += c;
